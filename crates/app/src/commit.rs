@@ -639,10 +639,10 @@ impl Render for CommitView {
                         );
                     }
                     match self.status.get(root) {
-                        None => list = list.child(muted("Reading…", &p)),
+                        None => list = list.child(muted("Loading…", &p)),
                         Some(Err(e)) => list = list.child(muted(e.clone(), &p)),
                         Some(Ok(repos)) if repos.is_empty() => {
-                            list = list.child(muted("Not a git repository.", &p))
+                            list = list.child(muted("Not a Git repository.", &p))
                         }
                         Some(Ok(repos)) => {
                             // A repository an earlier project holds is
@@ -656,7 +656,7 @@ impl Render for CommitView {
                                     repos.iter().map(|r| r.name.as_str()).collect();
                                 list = list.child(muted(
                                     format!(
-                                        "Holds {}, which {} listed above.",
+                                        "{} {} listed above.",
                                         names.join(", "),
                                         if names.len() == 1 { "is" } else { "are" }
                                     ),
@@ -679,7 +679,7 @@ impl Render for CommitView {
         // Without a repository there is nothing to change or commit.
         let has_repo = !first.is_empty();
         if state == State::Ready && !any && has_repo {
-            list = list.child(muted("Nothing has changed.", &p));
+            list = list.child(muted("No changes.", &p));
         }
 
         let staged_files: usize = unique(&projects)
@@ -1160,13 +1160,13 @@ fn change_menu(menu: PopupMenu, c: &MenuFor, view: &gpui::WeakEntity<CommitView>
                 let (title, body, ok) = if untracked {
                     (
                         format!("Delete {path}?"),
-                        "It is not in git, so nothing can bring it back.",
+                        "The file is not tracked by Git and cannot be recovered.",
                         "Delete",
                     )
                 } else {
                     (
-                        format!("Roll back {path}?"),
-                        "Its changes are discarded, back to the last commit.",
+                        format!("Roll back changes to {path}?"),
+                        "Changes since the last commit will be discarded.",
                         "Roll Back",
                     )
                 };

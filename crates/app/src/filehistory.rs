@@ -44,7 +44,7 @@ impl Done {
         match self {
             Done::Made { paths, .. } => describe(
                 &paths.iter().map(String::as_str).collect::<Vec<_>>(),
-                "making",
+                "creating",
             ),
             Done::Moved { pairs, .. } => {
                 let froms: Vec<&str> = pairs.iter().map(|(f, _)| f.as_str()).collect();

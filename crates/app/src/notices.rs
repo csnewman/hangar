@@ -79,8 +79,8 @@ impl Notices {
                     env: None,
                     tone: Tone::Busy,
                     title: config.name.clone(),
-                    what: "sign in again".into(),
-                    detail: "Its environments show what was last known".into(),
+                    what: "Sign-in required".into(),
+                    detail: "Environments show their last known state".into(),
                     at: now,
                     read: false,
                 };
@@ -108,8 +108,8 @@ impl Notices {
                         env: Some(card.env.clone()),
                         tone: Tone::Idle,
                         title: card.title.clone(),
-                        what: "a newer image is available".into(),
-                        detail: "Upgrade it from its page in the browser".into(),
+                        what: "Image update available".into(),
+                        detail: "Upgrade from the environment's tab".into(),
                         at: now,
                         read: false,
                     };
@@ -151,7 +151,7 @@ impl Notices {
             tone: Tone::Wait,
             title: title.into(),
             what: if heading.is_empty() {
-                "a terminal notifies".into()
+                "Terminal notification".into()
             } else {
                 heading.into()
             },
@@ -201,9 +201,9 @@ fn notice(c: &Card, was: Option<Rank>, now: DateTime<Utc>) -> Option<Notice> {
             lead(&c.summary),
             c.lines.get(1).map(|l| l.text.clone()).unwrap_or_default(),
         ),
-        Rank::Failed => (Event::Failed, "failed to start".into(), first_line),
+        Rank::Failed => (Event::Failed, "Failed to start".into(), first_line),
         Rank::Running | Rank::Working | Rank::Busy if was == Some(Rank::Starting) => {
-            (Event::Ready, "is ready".into(), String::new())
+            (Event::Ready, "Ready".into(), String::new())
         }
         _ => return None,
     };

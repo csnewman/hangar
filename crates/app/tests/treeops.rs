@@ -1120,7 +1120,7 @@ fn names_are_read_and_checked_as_intellij_reads_them() {
         Check::Fine,
         "made on the way: nothing there"
     );
-    assert_eq!(at("x/.."), Check::Wrong("“..” is not a name".into()));
+    assert_eq!(at("x/.."), Check::Wrong("“..” is not a valid name".into()));
     assert_eq!(
         at("../a"),
         Check::List("/home/dev".into()),
@@ -1128,7 +1128,7 @@ fn names_are_read_and_checked_as_intellij_reads_them() {
     );
     assert_eq!(
         check("/", "../a", None, &listed),
-        Check::Wrong("There is nothing above /".into())
+        Check::Wrong("Cannot go above /".into())
     );
     assert_eq!(
         check(

@@ -159,7 +159,7 @@ impl AddPlaceView {
     pub fn check_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let typed = self.url.read(cx).value().to_string();
         let Some(url) = store::normalise_url(&typed) else {
-            self.error = Some("That is not a server's address.".into());
+            self.error = Some("Invalid address. Enter a host name or URL.".into());
             cx.notify();
             return;
         };
@@ -172,14 +172,14 @@ impl AddPlaceView {
             let version = client.version().map_err(|e| e.to_string())?;
             if !version.versions.iter().any(|v| v == crate::api::VERSION) {
                 return Err(format!(
-                    "This server ({}) does not speak the app's API, {}.",
+                    "This server ({}) does not support API version {}.",
                     version.server,
                     crate::api::VERSION
                 ));
             }
             let grant = client.start_sign_in(&name).map_err(|e| match e {
                 crate::api::Error::Status(404, _) => {
-                    "This server cannot sign the app in through the browser: paste an access token instead."
+                    "This server does not support browser sign-in. Use an access token instead."
                         .to_string()
                 }
                 e => e.to_string(),
@@ -263,12 +263,12 @@ impl AddPlaceView {
                 true
             }
             Ok(SignedIn::Waiting) | Ok(SignedIn::Gone) => {
-                self.back_to_address("The sign-in expired before it was approved. Try again.", cx);
+                self.back_to_address("The sign-in request expired. Try again.", cx);
                 true
             }
             // A dropped connection is asked again, until the grant expires.
             Err(e) if chrono::Utc::now() < until => {
-                self.error = Some(format!("Asking the server again: {e}"));
+                self.error = Some(format!("Retrying: {e}"));
                 cx.notify();
                 false
             }
@@ -401,43 +401,41 @@ impl AddPlaceView {
                 )
                 .child(action)
         };
-        let soon = |p: &Palette| chip("Not yet", p).into_any_element();
+        let soon = |p: &Palette| chip("Coming soon", p).into_any_element();
         v_flex()
             .gap(px(12.))
             .child(self.heading(if self.first {
-                "Where should your environments run?"
+                "Choose where to run environments"
             } else {
                 "Add a place"
             }))
             .when(self.first, |d| {
-                d.child(div().text_color(p.muted).child(
-                    "You can add more places at any time; most people end up with two or three.",
-                ))
+                d.child(div().text_color(p.muted).child("You can add more places later."))
             })
             .child(card(
                 "kind-local",
                 "Local",
-                "Run Hangar on this computer, in the background. The app installs and upgrades it.",
+                "Run Hangar in the background on this computer. The app installs and updates it.",
                 soon(p),
             ))
             .child(card(
                 "kind-ssh",
-                "A machine over SSH",
-                "Your devbox. Needs SSH and KVM there; the app installs Hangar as you, without root.",
+                "SSH machine",
+                "Install Hangar on a Linux machine over SSH, without root. Requires SSH access and KVM.",
                 soon(p),
             ))
             .child(card(
                 "kind-proxmox",
                 "Proxmox",
-                "A Hangar of your own in a VM on your Proxmox. Needs an API token; nothing is installed on the host.",
+                "Deploy Hangar as a VM on Proxmox VE. Requires an API token; nothing is installed on the host.",
                 primary("kind-proxmox-go", "Set Up…", p)
                     .on_click(cx.listener(|this, _, _, cx| this.go(Step::Proxmox, cx)))
                     .into_any_element(),
             ))
             .child(card(
                 "kind-server",
-                "A Hangar server",
-                "Any Hangar at an address: your team's, your own cluster or big box. You sign in in the browser; the app keeps the token in the keychain.",
+                "Server",
+                "Connect to an existing Hangar server. Sign in through the browser; the token is stored in the keychain.",
                 primary("kind-server-go", "Connect…", p)
                     .on_click(cx.listener(|this, _, _, cx| this.go(Step::Address, cx)))
                     .into_any_element(),
@@ -455,11 +453,11 @@ impl AddPlaceView {
     fn address(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap(px(12.))
-            .child(self.heading("Add a place › A Hangar server"))
+            .child(self.heading("Add a place › Server"))
             .child(
                 div()
                     .text_color(p.muted)
-                    .child("Its address. The app checks it, then you sign in in your browser."),
+                    .child("Enter the server address. Sign-in continues in your browser."),
             )
             .child(field("Address", p).child(Input::new(&self.url)))
             .when_some(self.error.clone(), |d, e| {
@@ -525,7 +523,7 @@ impl AddPlaceView {
         };
         v_flex()
             .gap(px(12.))
-            .child(self.heading("Add a place › A Hangar server"))
+            .child(self.heading("Add a place › Server"))
             .child(
                 h_flex()
                     .gap(px(8.))
@@ -538,16 +536,20 @@ impl AddPlaceView {
                             .child(format!("Hangar {}", w.version)),
                     ),
             )
-            .child(step("2", "Finish signing in in your browser"))
+            .child(step("2", "Sign in through your browser"))
             .child(div().pl(px(26.)).text_color(p.muted).child(format!(
-                "{host} is open in your browser. Sign in there and approve “Hangar Desktop on {}”.",
+                "{host} has opened in your browser. Sign in and approve “Hangar Desktop on {}”.",
                 computer_name()
             )))
             .child(
                 h_flex()
                     .pl(px(26.))
                     .gap(px(10.))
-                    .child(div().text_color(p.muted).child("If it asks for a code:"))
+                    .child(
+                        div()
+                            .text_color(p.muted)
+                            .child("If prompted, enter this code:"),
+                    )
                     .child(
                         div()
                             .id("sign-in-code")
@@ -562,10 +564,10 @@ impl AddPlaceView {
                 div().pl(px(26.)).text_color(p.muted).child(
                     self.error
                         .clone()
-                        .unwrap_or_else(|| "Waiting for your browser…".into()),
+                        .unwrap_or_else(|| "Waiting for approval…".into()),
                 ),
             )
-            .child(step("3", "Name it"))
+            .child(step("3", "Name"))
             .child(
                 v_flex()
                     .pl(px(26.))
@@ -575,7 +577,7 @@ impl AddPlaceView {
                         div()
                             .text_size(px(11.5))
                             .text_color(p.muted)
-                            .child("Shown in the list; you can rename it later."),
+                            .child("Shown in the sidebar. You can rename it later."),
                     ),
             )
             .child(
@@ -583,7 +585,7 @@ impl AddPlaceView {
                     .gap(px(8.))
                     .justify_end()
                     .child(
-                        button("add-reopen", "Open the Browser Again", p)
+                        button("add-reopen", "Reopen Browser", p)
                             .on_click(move |_, _, cx| cx.open_url(&open)),
                     )
                     .child(
@@ -596,11 +598,11 @@ impl AddPlaceView {
     fn token_step(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .gap(px(12.))
-            .child(self.heading("Add a place › A Hangar server"))
+            .child(self.heading("Add a place › Server"))
             .child(
                 div()
                     .text_color(p.muted)
-                    .child("Its address, and an access token made on its Account page."),
+                    .child("Enter the server address and an access token created on the server's Account page."),
             )
             .child(field("Address", p).child(Input::new(&self.url)))
             .child(field("Access token", p).child(Input::new(&self.token)))

@@ -141,7 +141,7 @@ fn change(state: &State, method: &'static str, params: Value, window: &mut Windo
 fn body(state: &State, p: &Palette) -> gpui::Div {
     let s = state.borrow();
     let props = match &s.props {
-        None => return note("Reading…", p.muted),
+        None => return note("Loading…", p.muted),
         Some(Err(e)) => return note(e, p.bad),
         Some(Ok(props)) => props.clone(),
     };
@@ -177,8 +177,8 @@ fn body(state: &State, p: &Palette) -> gpui::Div {
                 ));
             }
             let sep_note = match props.separator.as_deref() {
-                Some("mixed") => Some("Mixed: choosing one makes every line end so."),
-                None => Some("One line, ended by none."),
+                Some("mixed") => Some("Mixed. Choose a separator to convert every line."),
+                None => Some("Single line with no separator."),
                 _ => None,
             };
             out = out.child(
@@ -224,7 +224,7 @@ fn body(state: &State, p: &Palette) -> gpui::Div {
                                         "props-bom-on"
                                     }
                                     .into(),
-                                    if props.bom { "Remove It" } else { "Add One" }.into(),
+                                    if props.bom { "Remove BOM" } else { "Add BOM" }.into(),
                                     false,
                                     "fs.convert",
                                     json!({ "bom": !props.bom }),
@@ -232,9 +232,9 @@ fn body(state: &State, p: &Palette) -> gpui::Div {
                             })
                             .child(div().text_size(px(11.)).text_color(p.muted).child(
                                 if props.bom {
-                                    "The file has one."
+                                    "The file has a BOM."
                                 } else {
-                                    "The file has none."
+                                    "The file has no BOM."
                                 },
                             )),
                     ),

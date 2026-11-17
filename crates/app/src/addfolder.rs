@@ -46,7 +46,7 @@ pub fn wanted(typed: &str, have: &[String]) -> Result<String, String> {
         t => t.to_string(),
     };
     if !want.starts_with('/') {
-        return Err("A folder is an absolute path.".into());
+        return Err("Enter an absolute path.".into());
     }
     if have.contains(&want) {
         return Err(format!("{want} is in the workspace already."));
@@ -363,7 +363,7 @@ impl Render for AddFolder {
                     .px(px(12.))
                     .py(px(4.))
                     .text_color(p.muted)
-                    .child("No folders here."),
+                    .child("No folders"),
             );
         }
         if !repos.is_empty() {
@@ -375,7 +375,7 @@ impl Render for AddFolder {
                     .text_size(px(11.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(p.muted)
-                    .child("Repositories on this machine"),
+                    .child("Repositories in the home folder"),
             );
         }
         for (i, (abs, shown_as)) in repos.into_iter().enumerate() {
@@ -420,7 +420,7 @@ impl Render for AddFolder {
                         div()
                             .text_size(px(11.))
                             .text_color(p.muted)
-                            .child("a project beside the others"),
+                            .child("Adds a new project"),
                     ),
             )
             .child(

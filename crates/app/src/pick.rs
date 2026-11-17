@@ -118,7 +118,7 @@ pub fn pick(
         let s = state.borrow();
         let mut list = v_flex().gap(px(1.));
         match &s.rows {
-            None => list = list.child(note("Reading…", p.muted)),
+            None => list = list.child(note("Loading…", p.muted)),
             Some(Err(e)) => list = list.child(note(e, p.bad)),
             Some(Ok(all)) => {
                 let rows = narrowed(all, &s.query.read(cx).value());

@@ -1758,7 +1758,7 @@ impl Render for ProjectView {
                             .unwrap_or(if listed {
                                 "Empty".into()
                             } else {
-                                format!("Reading {root}…")
+                                format!("Loading {root}…")
                             }),
                         &p,
                     ));
@@ -1917,7 +1917,7 @@ impl ProjectView {
         if self.path_field.is_none() {
             let field = cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("/ or ~/ and a path")
+                    .placeholder("Path starting with / or ~/")
                     .default_value(at.clone())
             });
             let sub = cx.subscribe_in(&field, window, |v, f, e: &InputEvent, window, cx| {
@@ -2059,7 +2059,7 @@ impl ProjectView {
                     )
                     .child(div().flex_1())
                     .when(at != "/", |d| {
-                        d.child(icon_button("fs-up", "arrow-up", "Up a folder").on_click(
+                        d.child(icon_button("fs-up", "arrow-up", "Parent Folder").on_click(
                             cx.listener(move |v, _, window, cx| v.show_here(&up, Some(window), cx)),
                         ))
                     })
@@ -2990,7 +2990,7 @@ fn tree_menu(
                             gpui_component::WindowExt::push_notification(
                                 window,
                                 gpui_component::notification::Notification::info(
-                                    "The clipboard holds no text.",
+                                    "The clipboard contains no text.",
                                 ),
                                 cx,
                             );
@@ -3242,7 +3242,7 @@ fn git_menu(
                     let call = t.code.call("git.log", json!({ "path": t.abs, "max": 100 }));
                     crate::pick::pick(
                         "Compare with Revision",
-                        "No commit changed it.",
+                        "No commits changed this file.",
                         window,
                         cx,
                         async move { call.await.map(|l| revision_choices(&l)) },

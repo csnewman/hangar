@@ -691,9 +691,9 @@ impl Render for ProblemsView {
                 .text_size(px(11.5))
                 .text_color(p.muted)
                 .child(SharedString::from(if current_tab {
-                    "No problems in the file shown."
+                    "No problems in the current file."
                 } else {
-                    "No problems in the files open. Language servers report on the files the editors show."
+                    "No problems in open files. Language servers check only files open in an editor."
                 }))
                 .into_any_element()
         } else {

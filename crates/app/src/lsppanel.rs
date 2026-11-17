@@ -107,7 +107,7 @@ impl Render for ServerChip {
             (Some(k), Some(ServerState::Ready)) => (
                 langs.server_name(k),
                 format!(
-                    "{} knows this file's code. Click for its details.",
+                    "{} is active for this file. Click for details.",
                     langs.server_name(k)
                 ),
                 false,
@@ -117,7 +117,7 @@ impl Render for ServerChip {
             }
             (Some(k), Some(ServerState::Unavailable(why))) => (
                 format!("No {} server", k.1),
-                format!("{why} Click for what to do."),
+                format!("{why} Click for details."),
                 true,
             ),
             _ => (
@@ -224,7 +224,7 @@ impl LspPanel {
         let (Some(path), Some(code)) =
             (ws.settings_path().map(str::to_string), ws.code(&self.key.0))
         else {
-            self.error = Some("The environment did not say where the settings are.".into());
+            self.error = Some("The settings file location is unknown.".into());
             cx.notify();
             return;
         };
@@ -284,9 +284,9 @@ impl LspPanel {
         let facts = v_flex()
             .gap(px(4.))
             .child(fact(
-                "Running",
+                "Started",
                 h_flex()
-                    .child(format!("since {since}"))
+                    .child(since)
                     .when_some(pid, |d, pid| d.child(div().text_color(p.muted).child(pid)))
                     .into_any_element(),
             ))
@@ -307,7 +307,7 @@ impl LspPanel {
                             .ghost()
                             .xsmall()
                             .icon(gpui_component::Icon::empty().path(crate::assets::icon("copy")))
-                            .tooltip("Copy the command")
+                            .tooltip("Copy Command")
                             .on_click(move |_, _, cx| crate::treeops::copy(copied.clone(), cx)),
                     )
                     .into_any_element(),
@@ -367,7 +367,7 @@ impl LspPanel {
                 vec![
                     div()
                         .text_color(p.muted)
-                        .child("The server has written nothing to its log.")
+                        .child("The log is empty.")
                         .into_any_element(),
                 ]
             } else {
@@ -478,7 +478,7 @@ impl LspPanel {
                                         gpui_component::Icon::empty()
                                             .path(crate::assets::icon("terminal")),
                                     )
-                                    .tooltip("Run it in a new terminal session")
+                                    .tooltip("Run in New Terminal")
                                     .on_click(cx.listener(move |v, _, _, cx| {
                                         v.ask(Ask::Run(run.clone()), cx)
                                     })),
@@ -500,7 +500,7 @@ impl LspPanel {
                     }
                     None => div()
                         .text_color(p.muted)
-                        .child("see its documentation")
+                        .child("See the server's documentation")
                         .into_any_element(),
                 })
         });
@@ -513,7 +513,7 @@ impl LspPanel {
                 d.child(
                     div()
                         .text_color(p.muted)
-                        .child("Install one, then try again:"),
+                        .child("Install one of these servers, then try again:"),
                 )
                 .children(rows)
             })
@@ -527,7 +527,7 @@ impl LspPanel {
                         Button::new("lsp-retry")
                             .primary()
                             .small()
-                            .label(if stopped { "Start again" } else { "Try again" })
+                            .label(if stopped { "Start Again" } else { "Try Again" })
                             .on_click(cx.listener(move |v, _, _, cx| {
                                 v.languages.update(cx, |l, cx| l.retry(&key, cx));
                                 let _ = v.chip.update(cx, |c, cx| c.set_open(false, cx));
@@ -536,9 +536,9 @@ impl LspPanel {
                     .child(
                         Button::new("lsp-choose")
                             .small()
-                            .label("Choose a server…")
+                            .label("Choose Server…")
                             .tooltip(format!(
-                                "Name a server for {} in the settings' languageServers",
+                                "Set the {} server in the languageServers setting",
                                 self.key.1
                             ))
                             .on_click(cx.listener(|v, _, _, cx| v.choose(cx))),
@@ -556,8 +556,8 @@ fn traced(m: &Value, p: &Palette) -> gpui::AnyElement {
         .unwrap_or_default();
     let what = match (m["method"].as_str(), m["id"].as_str()) {
         (Some(method), _) => method.to_string(),
-        (None, Some(id)) => format!("answer {id}"),
-        (None, None) => format!("answer {}", m["id"]),
+        (None, Some(id)) => format!("response {id}"),
+        (None, None) => format!("response {}", m["id"]),
     };
     let error = m["error"].as_str().map(str::to_string);
     h_flex()
@@ -570,7 +570,7 @@ fn traced(m: &Value, p: &Palette) -> gpui::AnyElement {
                 .child(what),
         )
         .when(m["kind"] == "response" && m["method"].is_string(), |d| {
-            d.child(div().text_color(p.muted).child("answered"))
+            d.child(div().text_color(p.muted).child("response"))
         })
         .when_some(m["ms"].as_u64(), |d, ms| {
             d.child(div().text_color(p.muted).child(format!("{ms} ms")))
@@ -665,7 +665,7 @@ impl Render for LspPanel {
         } else {
             div()
                 .text_color(p.muted)
-                .child("Asking the environment…")
+                .child("Loading…")
                 .into_any_element()
         };
         v_flex()

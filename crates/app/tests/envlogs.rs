@@ -107,7 +107,7 @@ fn a_log_is_read_from_its_end_and_on(cx: &mut TestAppContext) {
         view.read_with(cx, |v, cx| {
             v.chosen() == "gpu"
                 && v.pane().read(cx).lines().is_empty()
-                && v.pane().read(cx).empty() == "There is no such log here yet."
+                && v.pane().read(cx).empty() == "This log is not available yet."
         })
     });
 }

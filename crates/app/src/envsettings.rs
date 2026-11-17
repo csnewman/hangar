@@ -151,8 +151,8 @@ pub fn changes(from: &MachineSettings, to: &MachineSettings) -> Vec<String> {
         out.push(format!("GPU {} → {}", from.gpu, to.gpu));
     }
     if from.dax != to.dax {
-        let way = |d: Option<bool>| if d == Some(true) { "mapped" } else { "read in" };
-        out.push(format!("image files {} → {}", way(from.dax), way(to.dax)));
+        let way = |d: Option<bool>| if d == Some(true) { "on" } else { "off" };
+        out.push(format!("DAX {} → {}", way(from.dax), way(to.dax)));
     }
     if from.swap_mib != to.swap_mib {
         out.push(format!(
@@ -163,14 +163,10 @@ pub fn changes(from: &MachineSettings, to: &MachineSettings) -> Vec<String> {
     }
     if from.memory_reclaim != to.memory_reclaim {
         let way = |r: Option<bool>| {
-            if r == Some(true) {
-                "handed back"
-            } else {
-                "kept"
-            }
+            if r == Some(true) { "on" } else { "off" }
         };
         out.push(format!(
-            "idle memory {} → {}",
+            "idle memory reclaim {} → {}",
             way(from.memory_reclaim),
             way(to.memory_reclaim)
         ));
@@ -188,7 +184,7 @@ fn display(d: &str) -> &'static str {
 
 fn swap(s: Option<i64>) -> String {
     match s {
-        None => "the worker's default".into(),
+        None => "worker default".into(),
         Some(0) => "none".into(),
         Some(m) => memory(m),
     }
@@ -335,7 +331,7 @@ impl EnvSettingsView {
             .map(|t| t.text.clone())
             .unwrap_or_default();
         let task = cx.new(|cx| {
-            let mut s = InputState::new(window, cx).placeholder("What it is for");
+            let mut s = InputState::new(window, cx).placeholder("Describe the current task");
             s.set_value(task_text, window, cx);
             s
         });
@@ -517,7 +513,7 @@ impl EnvSettingsView {
             self.live.read(cx).value().end().round() as i64
         } else {
             parse_gib(&self.memory.read(cx).value())
-                .ok_or("Memory is a number of GB, such as 4 or 1.5")?
+                .ok_or("Enter memory in GB, such as 4 or 1.5.")?
         };
         let cpus: i64 = self
             .cpus
@@ -527,13 +523,13 @@ impl EnvSettingsView {
             .parse()
             .ok()
             .filter(|n| *n >= 1)
-            .ok_or("vCPUs is a whole number, 1 or more")?;
+            .ok_or("Enter a whole number of vCPUs, 1 or more.")?;
         let swap_mib = match self.swap {
             SwapWay::Default => None,
             SwapWay::None => Some(0),
             SwapWay::Size => Some(
                 parse_gib(&self.swap_size.read(cx).value())
-                    .ok_or("Swap is a number of GB, such as 4 or 1.5")?,
+                    .ok_or("Enter swap in GB, such as 4 or 1.5.")?,
             ),
         };
         Ok(MachineSettings {
@@ -554,7 +550,7 @@ impl EnvSettingsView {
         };
         let mut out = match self.draft(cx) {
             Ok(d) => changes(&saved(&env), &d),
-            Err(_) => vec!["the machine".into()],
+            Err(_) => vec!["machine settings".into()],
         };
         if self.ports_public != env.ports_public.unwrap_or_default() {
             out.push(format!(
@@ -568,7 +564,7 @@ impl EnvSettingsView {
         }
         let task = env.task.as_ref().map(|t| t.text.as_str()).unwrap_or("");
         if self.task.read(cx).value().trim() != task.trim() {
-            out.push("its task".into());
+            out.push("task".into());
         }
         for pack in self.copies.keys() {
             let name = self
@@ -578,7 +574,7 @@ impl EnvSettingsView {
                 .and_then(|ps| ps.iter().find(|p| &p.id == pack))
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| "a pack".into());
-            out.push(format!("{name}'s copy"));
+            out.push(format!("copy of {name}"));
         }
         out
     }
@@ -715,12 +711,12 @@ impl EnvSettingsView {
         let (title, body, ok) = match action {
             Action::Reset => (
                 format!("Reset {name} to its template?"),
-                "It takes its template's current settings; its disks and everything on them are kept.",
+                "Applies the template's current settings. Disks and their data are kept.",
                 "Reset",
             ),
             _ => (
                 format!("Delete {name}?"),
-                "Its disks and everything on them go with it. This cannot be undone.",
+                "Its disks and all data on them will be deleted. This cannot be undone.",
                 "Delete",
             ),
         };
@@ -746,7 +742,7 @@ impl Render for EnvSettingsView {
         let pending = self.pending(cx);
         let body = match &env {
             Some(env) => self.page_body(env, &p, window, cx).into_any_element(),
-            None => note("The environment is gone.", &p).into_any_element(),
+            None => note("Environment not found.", &p).into_any_element(),
         };
         let summary = if let Some(e) = &self.error {
             div().text_color(p.bad).child(e.clone())
@@ -757,7 +753,7 @@ impl Render for EnvSettingsView {
         } else {
             let running = env.as_ref().is_some_and(|e| e.phase == "running");
             let tail = if running {
-                " Memory changes as it runs."
+                " Memory changes apply immediately."
             } else {
                 ""
             };
@@ -934,16 +930,15 @@ impl EnvSettingsView {
         };
         let mut image = v_flex().gap(px(6.)).child(
             field("Image", p).child(
-                div().min_w_0().truncate().child(
-                    d.image
-                        .clone()
-                        .unwrap_or_else(|| "As its template names it".into()),
-                ),
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(d.image.clone().unwrap_or_else(|| "Set by template".into())),
             ),
         );
         if let Some(dg) = &d.image_digest {
             image =
-                image.child(field("Copy", p).child(div().text_color(p.muted).child(digest(dg))));
+                image.child(field("Build", p).child(div().text_color(p.muted).child(digest(dg))));
         }
         // What needs deciding about its image, as its tab's banners say it.
         let busy = self.busy;
@@ -984,13 +979,13 @@ impl EnvSettingsView {
             .child(field("Name", p).child(env.name.clone()))
             .child(field("Owner", p).child(env.owner.clone()))
             .child(field("Task", p).child(div().w(px(360.)).child(Input::new(&self.task).small())))
-            .child(note("Empty marks its task done.", p))
+            .child(note("Clear to mark the task done.", p))
             .child(section("Template", p))
             .child(field("Template", p).child(env.template.clone()))
             .when(!changed.is_empty(), |d| {
                 d.child(note(
                     &format!(
-                        "Changed from its template: {}. Reset to Template, in the Danger zone, gives it the template's.",
+                        "Differs from the template: {}. To restore the template's settings, use Reset to Template in the Danger zone.",
                         changed.join(", ")
                     ),
                     p,
@@ -1024,7 +1019,7 @@ impl EnvSettingsView {
                     h_flex()
                         .text_size(px(11.))
                         .text_color(p.muted)
-                        .child(div().flex_1().child(format!("{} · the least", memory(min))))
+                        .child(div().flex_1().child(format!("{} · minimum", memory(min))))
                         .child(
                             div()
                                 .flex_1()
@@ -1035,20 +1030,20 @@ impl EnvSettingsView {
                                 .child(memory(now)),
                         )
                         .child(div().flex_1().flex().justify_end().child(format!(
-                            "{} · the most {place_name} has room for",
+                            "{} · maximum available on {place_name}",
                             memory(max)
                         ))),
                 );
             if let Some(s) = &self.stats {
                 let mut used = format!(
-                    "In use {} · on the host {}",
+                    "In use: {} · On host: {}",
                     memory(s.memory_used_mib),
                     memory(s.host_memory_mib.unwrap_or_default())
                 );
                 if let Some(swapped) = s.swap_used_mib.filter(|&m| m > 0) {
-                    used.push_str(&format!(" · swapped {}", memory(swapped)));
+                    used.push_str(&format!(" · Swapped: {}", memory(swapped)));
                 }
-                used.push_str(". It can't go below what its programs use plus 512 MB.");
+                used.push_str(". Cannot be set below current usage plus 512 MB.");
                 memory_part = memory_part.child(note(&used, p));
             }
         } else {
@@ -1107,13 +1102,13 @@ impl EnvSettingsView {
         let passthrough = env.gpu.as_deref() == Some("passthrough");
         let reclaim_live = live_reclaim(env);
         let hint = if changeable(env) {
-            "They apply when it next starts."
+            "Changes apply at next start."
         } else if live.is_some() {
-            "Its memory and idle memory change as it runs. Stop it to change the rest; they apply when it next starts."
+            "Memory and idle memory changes apply immediately. Stop the environment to change other settings; they apply at next start."
         } else if reclaim_live {
-            "Its idle memory changes as it runs. Stop it to change the rest; they apply when it next starts."
+            "Idle memory changes apply immediately. Stop the environment to change other settings; they apply at next start."
         } else {
-            "Stop it to change these. They apply when it next starts."
+            "Stop the environment to change these settings. Changes apply at next start."
         };
         let placement: Vec<String> = env
             .placement
@@ -1132,7 +1127,7 @@ impl EnvSettingsView {
                                 .pt(px(4.))
                                 .text_size(px(11.))
                                 .text_color(p.muted)
-                                .child("changes while it runs"),
+                                .child("applies immediately"),
                         )
                     }),
             )
@@ -1151,7 +1146,7 @@ impl EnvSettingsView {
                             d.child(
                                 div()
                                     .text_color(p.muted)
-                                    .child(format!("of {} on the largest worker", m.cpus)),
+                                    .child(format!("up to {} on the largest worker", m.cpus)),
                             )
                         }),
                 ),
@@ -1187,7 +1182,7 @@ impl EnvSettingsView {
                 ),
             )
             .child(note(
-                "Behind zswap; made empty at each cold start, kept across a suspend.",
+                "Compressed with zswap. Cleared at each cold start; kept across suspend.",
                 p,
             ))
             .child(
@@ -1200,7 +1195,7 @@ impl EnvSettingsView {
                                 .pt(px(4.))
                                 .text_size(px(11.))
                                 .text_color(p.muted)
-                                .child("changes while it runs"),
+                                .child("applies immediately"),
                         )
                     }),
             )
@@ -1210,7 +1205,7 @@ impl EnvSettingsView {
                         .gap(px(8.))
                         .child(
                             Checkbox::new("reclaim")
-                                .label("Hand it back to the worker")
+                                .label("Reclaim idle memory")
                                 .checked(self.reclaim)
                                 .disabled(fixed && !reclaim_live)
                                 .on_click(cx.listener(|this, b: &bool, _, cx| {
@@ -1231,7 +1226,7 @@ impl EnvSettingsView {
                 ),
             )
             .child(note(
-                "What its programs leave idle is swapped out, and cache nothing touches dropped, so its place gets the memory back. A program left idle is slow for a moment when next used.",
+                "Swaps out idle program memory and drops unused cache, returning memory to the worker. Idle programs may respond slowly when next used.",
                 p,
             ))
             .child(section("Machine", p))
@@ -1263,7 +1258,7 @@ impl EnvSettingsView {
             .child(
                 field("Image files", p).child(
                     Checkbox::new("dax")
-                        .label("Map them from the worker's memory (DAX)")
+                        .label("Map from the worker's memory (DAX)")
                         .checked(self.dax)
                         .disabled(fixed)
                         .on_click(cx.listener(|this, b: &bool, _, cx| {
@@ -1280,7 +1275,7 @@ impl EnvSettingsView {
                                 .font_family(crate::diff::mono())
                                 .child(placement.join(", ")),
                         )
-                        .child(div().text_color(p.muted).child("from its template")),
+                        .child(div().text_color(p.muted).child("from template")),
                 )
             })
             .child(note(hint, p))
@@ -1295,9 +1290,9 @@ impl EnvSettingsView {
             .map(|m| m.username.clone())
             .unwrap_or_default();
         let body = match &self.packs {
-            None => note("Reading its packs…", p).into_any_element(),
+            None => note("Loading packs…", p).into_any_element(),
             Some(Err(e)) => div().text_color(p.bad).child(e.clone()).into_any_element(),
-            Some(Ok(list)) if list.is_empty() => note("It has no packs.", p).into_any_element(),
+            Some(Ok(list)) if list.is_empty() => note("No packs.", p).into_any_element(),
             Some(Ok(list)) => {
                 let mut rows = v_flex().gap(px(6.));
                 for (i, pk) in list.iter().enumerate() {
@@ -1309,13 +1304,13 @@ impl EnvSettingsView {
                     };
                     let label = match (&chosen, drafted) {
                         (Some(c), _) => copy_name(c, &mine),
-                        (None, _) => "As it was given".into(),
+                        (None, _) => "Default".into(),
                     };
                     let from = match (drafted, pk.from.as_str()) {
-                        (Some(Some(_)), _) | (None, "environment") => "chosen here",
-                        (Some(None), _) => "back to how it was given",
-                        (None, "template") => "the template's",
-                        (None, "kept") => "the one it was given",
+                        (Some(Some(_)), _) | (None, "environment") => "set here",
+                        (Some(None), _) => "reverts to default",
+                        (None, "template") => "from template",
+                        (None, "kept") => "first assigned",
                         (None, "default") => "your default",
                         _ => "",
                     };
@@ -1329,7 +1324,7 @@ impl EnvSettingsView {
                     let can_undo = drafted.is_some_and(|d| d.is_some())
                         || (drafted.is_none() && pk.from == "environment");
                     let whose = match (&pk.owner, &pk.team, pk.builtin) {
-                        (_, _, true) => "Hangar's".to_string(),
+                        (_, _, true) => "built-in".to_string(),
                         (_, Some(t), _) => format!("team {t}"),
                         (Some(o), _, _) => o.clone(),
                         _ => String::new(),
@@ -1359,7 +1354,7 @@ impl EnvSettingsView {
                                             div()
                                                 .text_size(px(11.))
                                                 .text_color(p.muted)
-                                                .child("attaches itself"),
+                                                .child("self-attaching"),
                                         )
                                     }),
                             )
@@ -1426,7 +1421,7 @@ impl EnvSettingsView {
             .gap(px(10.))
             .child(section("Packs", p))
             .child(note(
-                "The shared files it has, and which copy of each: a copy is one set of a pack's files, yours or shared. A running environment changes over as it runs.",
+                "Shared files in this environment, and the copy used of each pack. A copy is one set of a pack's files, personal or shared. Changes apply immediately.",
                 p,
             ))
             .child(body)
@@ -1467,9 +1462,9 @@ impl EnvSettingsView {
             };
         v_flex()
             .gap(px(10.))
-            .child(section("Its web servers", p))
+            .child(section("Web servers", p))
             .child(
-                field("Reached by", p).child(
+                field("Visibility", p).child(
                     h_flex()
                         .rounded(px(6.))
                         .border_1()
@@ -1481,16 +1476,16 @@ impl EnvSettingsView {
             )
             .child(note(
                 if public {
-                    "Anyone who can reach Hangar, without signing in. A port reached by its number stays behind sign-in."
+                    "Anyone who can reach Hangar, without signing in. Ports reached by number always require sign-in."
                 } else {
-                    "People who may use this environment, signed in to Hangar."
+                    "Signed-in users with access to this environment."
                 },
                 p,
             ))
             .when(!env.web_names.is_empty(), |d| {
-                d.child(field("Its names", p).child(env.web_names.join(", ")))
+                d.child(field("Names", p).child(env.web_names.join(", ")))
             })
-            .child(note("The Ports tool window lists what it listens on, each opened in the browser.", p))
+            .child(note("The Ports tool window lists listening ports and opens them in the browser.", p))
     }
 
     fn danger(
@@ -1503,11 +1498,10 @@ impl EnvSettingsView {
         let stopped = matches!(env.phase.as_str(), "stopped" | "failed");
         let changed = &env.template_changes;
         let reset_note = if changed.is_empty() {
-            "It takes its template's current settings; its disks and everything on them are kept."
-                .to_string()
+            "Applies the template's current settings. Disks and their data are kept.".to_string()
         } else {
             format!(
-                "It takes its template's current settings ({}); its disks and everything on them are kept.",
+                "Applies the template's current settings ({}). Disks and their data are kept.",
                 changed.join(", ")
             )
         };
@@ -1556,13 +1550,13 @@ impl EnvSettingsView {
                 if stopped {
                     reset_note
                 } else {
-                    format!("{reset_note} Stop it first.")
+                    format!("{reset_note} Stop the environment first.")
                 },
                 reset,
             ))
             .child(row(
                 "Delete",
-                "Its disks and everything on them go with it. This cannot be undone.".into(),
+                "Its disks and all data on them will be deleted. This cannot be undone.".into(),
                 delete,
             ))
     }
@@ -1573,29 +1567,29 @@ fn access(env: &Environment, p: &Palette) -> impl IntoElement {
     let a = env.access.clone().unwrap_or_default();
     let rows = [
         (
-            "Packs that attach themselves",
+            "Self-attaching packs",
             !a.no_self_attached.unwrap_or_default(),
-            "the profile among them",
+            "Including the profile",
         ),
         (
             "Sensitive files",
             !a.no_sensitive_files.unwrap_or_default(),
-            "credentials in its packs, such as Claude's sign-in",
+            "Credentials in packs, such as Claude's sign-in",
         ),
         (
-            "Signing with your SSH keys",
+            "SSH key signing",
             !a.no_ssh_keys.unwrap_or_default(),
-            "through its SSH agent; the keys never enter it",
+            "Through the SSH agent; private keys never enter the environment",
         ),
         (
-            "Hangar's registry",
+            "Hangar registry",
             !a.no_registry.unwrap_or_default(),
-            "a credential for pulling and pushing images",
+            "Credential for pulling and pushing images",
         ),
         (
-            "Running code in its folders",
+            "Folder trust",
             !a.no_editor_trust.unwrap_or_default(),
-            "language servers, without asking first",
+            "Language servers run without asking first",
         ),
     ];
     let mut list = v_flex()
@@ -1622,16 +1616,16 @@ fn access(env: &Environment, p: &Palette) -> impl IntoElement {
                         .text_size(px(11.5))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(if given { p.good } else { p.muted })
-                        .child(if given { "Given" } else { "Kept from it" }),
+                        .child(if given { "Allowed" } else { "Blocked" }),
                 ),
         );
     }
     v_flex()
         .gap(px(10.))
-        .child(section("What it is given", p))
+        .child(section("Permissions", p))
         .child(list)
         .child(note(
-            "Its template says these, for code you do not trust; change the template to change them.",
+            "Set by the template, to restrict untrusted code. Change the template to change these.",
             p,
         ))
 }

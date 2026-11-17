@@ -237,7 +237,7 @@ pub fn upload(
             Ok(None) => {}
             Err(e) => {
                 let _ = handle.update(cx, |_, window, cx| {
-                    window.push_notification(Notification::error(format!("Upload: {e}")), cx)
+                    window.push_notification(Notification::error(format!("Upload failed: {e}")), cx)
                 });
             }
         }
@@ -398,7 +398,7 @@ pub fn ask_clash(
 ) {
     let title = match names {
         [one] => format!("{one} already exists in {to}"),
-        many => format!("{} names already exist in {to}", many.len()),
+        many => format!("{} items already exist in {to}", many.len()),
     };
     let listed: Vec<String> = if names.len() > 1 {
         names.iter().take(8).cloned().collect()
@@ -427,7 +427,7 @@ pub fn ask_clash(
         let mut body = v_flex()
             .gap(px(10.))
             .child(div().text_color(p.muted).child(format!(
-                "{doing} would put another there. What is replaced goes to the trash."
+                "{doing} would overwrite existing items. Replaced items are moved to the trash."
             )));
         for n in &listed {
             body = body.child(div().text_size(px(11.5)).child(format!("· {n}")));
@@ -502,7 +502,9 @@ pub fn download(
                 Notification::success(format!("Downloaded {}", save.display())),
                 cx,
             ),
-            Err(e) => window.push_notification(Notification::error(format!("Download: {e}")), cx),
+            Err(e) => {
+                window.push_notification(Notification::error(format!("Download failed: {e}")), cx)
+            }
         });
     })
     .detach();

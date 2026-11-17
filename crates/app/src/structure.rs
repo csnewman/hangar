@@ -585,8 +585,8 @@ impl Render for StructureView {
             }
         }
         let body = match &self.state {
-            State::NoFile => note("Open a file to see its outline.".into()),
-            State::Reading if self.symbols.is_empty() => note("Reading…".into()),
+            State::NoFile => note("Open a file to view its structure.".into()),
+            State::Reading if self.symbols.is_empty() => note("Loading…".into()),
             State::Failed(e) => note(e.clone()),
             _ if self.symbols.is_empty() => note(
                 if self
@@ -594,9 +594,9 @@ impl Render for StructureView {
                     .as_ref()
                     .is_some_and(|d| is_markdown(d.read(cx).path()))
                 {
-                    "It has no headings."
+                    "No headings."
                 } else {
-                    "Its language server lists nothing."
+                    "The language server reported no symbols."
                 }
                 .into(),
             ),
@@ -639,7 +639,7 @@ impl Render for StructureView {
                     "structure-follow",
                     "Follow Caret",
                     self.follow,
-                    "Autoscroll from Source: keep the caret's symbol in view",
+                    "Autoscroll from Source",
                 )
                 .on_click(cx.listener(|v, _, _, cx| {
                     v.follow = !v.follow;

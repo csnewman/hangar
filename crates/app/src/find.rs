@@ -66,7 +66,7 @@ impl Scope {
     pub fn folder(typed: &str, roots: &[&str], current: Option<&str>) -> Result<Scope, String> {
         let typed = typed.trim().trim_end_matches('/');
         if typed.is_empty() {
-            return Err("Type a folder to search in.".into());
+            return Err("Enter a folder to search in.".into());
         }
         if typed.starts_with('/') {
             let root = roots
@@ -76,7 +76,7 @@ impl Scope {
                     typed == r || typed.starts_with(&format!("{r}/"))
                 })
                 .max_by_key(|r| r.len())
-                .ok_or_else(|| format!("{typed} is in no project."))?;
+                .ok_or_else(|| format!("{typed} is not in any project."))?;
             let dir = typed[root.trim_end_matches('/').len()..].trim_start_matches('/');
             return Ok(if dir.is_empty() {
                 Scope::Project(root.to_string())
@@ -1077,9 +1077,9 @@ impl FindView {
         chip("find-pin", "Pin".into(), pinned, p)
             .tooltip(move |window, cx| {
                 gpui_component::tooltip::Tooltip::new(if pinned {
-                    "Unpin the tab: the next search replaces these results"
+                    "Unpin tab. The next search replaces these results."
                 } else {
-                    "Pin the tab: the next search opens another"
+                    "Pin tab. The next search opens a new tab."
                 })
                 .build(window, cx)
             })
@@ -1155,11 +1155,11 @@ impl FindView {
         });
         let (Some((_, path, text)), Some(m)) = (&self.cur.preview, selected) else {
             return frame
-                .child(note("Select a match to see it in its file.", p))
+                .child(note("Select a match to preview it.", p))
                 .into_any_element();
         };
         let body = match text {
-            None => note("Reading…", p),
+            None => note("Loading…", p),
             Some(Err(e)) => note(e.clone(), p),
             Some(Ok(None)) => note("The file cannot be shown.", p),
             Some(Ok(Some(text))) => crate::findpop::lines_around(text, m, 41, p),
@@ -1217,14 +1217,12 @@ impl Render for FindView {
             } else {
                 "matches"
             };
-            let mut s = format!(
-                "{} {matches} in {} {files}",
-                self.cur.matches, self.cur.files
-            );
-            if self.cur.truncated {
-                s.push_str(", the first found");
-            }
-            s
+            format!(
+                "{}{} {matches} in {} {files}",
+                self.cur.matches,
+                if self.cur.truncated { "+" } else { "" },
+                self.cur.files
+            )
         };
         let bar = h_flex()
             .flex_none()
@@ -1269,7 +1267,7 @@ impl Render for FindView {
                     "find-preview",
                     "Preview",
                     self.previewing,
-                    "Show the match in its file",
+                    "Preview the selected match",
                 )
                 .on_click(cx.listener(|v, _, _, cx| {
                     v.previewing = !v.previewing;

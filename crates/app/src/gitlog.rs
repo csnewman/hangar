@@ -873,7 +873,7 @@ impl GitView {
                 }))
                 .item(on("Checkout Revision", |v, h, window, cx| {
                     let short: String = h.chars().take(8).collect();
-                    let done = format!("Checked out {short}; no branch is current");
+                    let done = format!("Checked out {short} (detached HEAD)");
                     v.act_saying("git.checkoutCommit", json!({ "rev": h }), done, window, cx)
                 }))
                 .separator()
@@ -945,12 +945,20 @@ impl GitView {
         let short: String = hash.chars().take(8).collect();
         let me = cx.entity().downgrade();
         let modes = [
-            ("Soft", "soft", "Keeps the changes since, staged."),
-            ("Mixed", "mixed", "Keeps the changes since, not staged."),
+            (
+                "Soft",
+                "soft",
+                "Files are not changed; differences are staged for commit.",
+            ),
+            (
+                "Mixed",
+                "mixed",
+                "Files are not changed; differences are not staged.",
+            ),
             (
                 "Hard",
                 "hard",
-                "Throws the changes since away, and any not committed.",
+                "Files are reverted to the selected commit. Uncommitted changes are lost.",
             ),
         ];
         window.open_dialog(cx, move |dialog, _, cx| {
@@ -958,7 +966,7 @@ impl GitView {
             let mut body = v_flex().gap(px(8.)).child(
                 div()
                     .text_color(p.muted)
-                    .child(format!("The current branch is moved to {short}.")),
+                    .child(format!("The current branch will be reset to {short}.")),
             );
             for (label, mode, about) in modes {
                 let (me, hash) = (me.clone(), hash.clone());
@@ -1001,7 +1009,7 @@ impl GitView {
     fn ask_branch_at(&mut self, hash: String, window: &mut Window, cx: &mut Context<Self>) {
         let me = cx.entity().downgrade();
         crate::treeops::ask_name("New Branch", "", window, cx, move |name, window, cx| {
-            let said = format!("Made {name}, and switched to it");
+            let said = format!("Checked out new branch {name}");
             let _ = me.update(cx, |v, cx| {
                 v.act_saying(
                     "git.createBranch",
@@ -1102,7 +1110,7 @@ impl GitView {
                 }
             };
             menu = menu.item(
-                PopupMenuItem::new("As chosen above")
+                PopupMenuItem::new("No Filter")
                     .checked(chosen.is_none())
                     .on_click(pick(None)),
             );
@@ -1119,7 +1127,7 @@ impl GitView {
 
     fn details(&self, p: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
         let info = match &self.info {
-            None => return note("Choose a commit to see its files and message.", p),
+            None => return note("Select a commit to view its details.", p),
             Some(Err(e)) => return note(e.clone(), p),
             Some(Ok(info)) => info,
         };
@@ -1197,7 +1205,7 @@ impl GitView {
             ));
         if info.committer != info.author {
             meta = meta.child(format!(
-                "committed by {}, {}",
+                "Committed by {}, {}",
                 info.committer,
                 at(info.committer_time)
             ));
@@ -1347,7 +1355,8 @@ impl Render for GitView {
         let repos = self.repos(cx);
         if self.text.is_none() {
             let text = cx.new(|cx| {
-                gpui_component::input::InputState::new(window, cx).placeholder("Text in messages")
+                gpui_component::input::InputState::new(window, cx)
+                    .placeholder("Search commit messages")
             });
             // Typed text narrows the log once typing pauses.
             self.text_sub = Some(cx.subscribe(
@@ -1441,7 +1450,7 @@ impl Render for GitView {
                             let h = h.clone();
                             move |window, cx| {
                                 gpui_component::tooltip::Tooltip::new(format!(
-                                    "{h}: every commit that changed it. Click to show them all."
+                                    "Commits that changed {h}. Click to show all commits."
                                 ))
                                 .build(window, cx)
                             }
@@ -1457,9 +1466,9 @@ impl Render for GitView {
             (_, Some(e)) => note(e.clone(), &p),
             _ if self.chosen.is_none() => note(
                 if self.status.is_empty() {
-                    "Reading…"
+                    "Loading…"
                 } else {
-                    "No git repository in the environment's projects."
+                    "No Git repositories in the environment's projects."
                 },
                 &p,
             ),
@@ -1482,7 +1491,7 @@ impl Render for GitView {
                                         .px(px(10.))
                                         .text_color(p.accent)
                                         .cursor_pointer()
-                                        .child(if v.loading { "Reading…" } else { "Show more" })
+                                        .child(if v.loading { "Loading…" } else { "Show more" })
                                         .on_click(cx.listener(|v, _, _, cx| v.load(true, cx)))
                                         .into_any_element()
                                 }

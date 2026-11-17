@@ -866,7 +866,7 @@ impl DocEditor {
                         d.blame = Some(b);
                         d.blame_note = None;
                     }
-                    Err(e) => d.blame_note = Some(format!("No annotations: {e}")),
+                    Err(e) => d.blame_note = Some(format!("Could not load annotations: {e}")),
                 }
                 cx.notify();
             });
@@ -2075,7 +2075,7 @@ impl DocEditor {
             crate::ui::modal(cx);
             menu = menu.action_context(focus).max_h(px(420.)).scrollable(true);
             if actions.is_empty() {
-                return menu.item(PopupMenuItem::new("No actions here").disabled(true));
+                return menu.item(PopupMenuItem::new("No actions available").disabled(true));
             }
             let fixes = actions.iter().filter(|a| crate::lspedit::is_fix(a)).count();
             for (i, a) in actions.into_iter().enumerate() {
@@ -2152,7 +2152,7 @@ impl DocEditor {
                     if count == 1 { "" } else { "s" }
                 ));
             if count == 0 {
-                return menu.item(PopupMenuItem::new("None found").disabled(true));
+                return menu.item(PopupMenuItem::new("No usages found").disabled(true));
             }
             for (root, matches) in &found {
                 for m in matches {
@@ -2503,7 +2503,7 @@ impl DocEditor {
                         .text_color(p.busy),
                 )
                 .child(div().min_w_0().truncate().child(format!(
-                    "Restricted: no language servers in {name}, since they would run its code."
+                    "Restricted mode: language servers are disabled because they can run code in {name}."
                 )))
                 .child(div().flex_1())
                 .child({
@@ -2631,7 +2631,7 @@ impl DocEditor {
             }
             Ok(None) => {}
             Err(e) => {
-                self.state = State::Failed(format!("lost track of the document: {e}"));
+                self.state = State::Failed(format!("the document is out of sync: {e}"));
                 self.sync = None;
                 cx.notify();
                 return;
@@ -2973,7 +2973,7 @@ impl Render for DocEditor {
             State::Deleted => Some("The file has been deleted.".to_string()),
             State::Failed(e) => Some(format!("Not connected: {e}")),
             State::Reconnecting(why) => Some(format!(
-                "Reconnecting ({why}); what you type is kept and saved once it is back"
+                "Reconnecting ({why})… Edits are kept and saved when the connection is restored."
             )),
             State::Open if self.save_error.is_some() => {
                 self.save_error.as_ref().map(|e| format!("Not saved: {e}"))

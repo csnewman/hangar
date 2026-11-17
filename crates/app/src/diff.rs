@@ -574,7 +574,7 @@ impl DiffView {
     /// Compares the file with another or with text: both read as they are.
     fn load_compared(&mut self, other: Other, cx: &mut Context<Self>) {
         let Some(code) = self.code_for(&self.spec.root, cx) else {
-            self.loaded = Loaded::Failed("The project is not connected.".into());
+            self.loaded = Loaded::Failed("the project is not connected".into());
             return;
         };
         let right = code.call("fs.read", json!({ "path": self.spec.abs() }));
@@ -583,7 +583,8 @@ impl DiffView {
             Other::File { root, abs } => match self.code_for(root, cx) {
                 Some(c) => Some(c.call("fs.read", json!({ "path": abs }))),
                 None => {
-                    self.loaded = Loaded::Failed("Its project is not connected.".into());
+                    self.loaded =
+                        Loaded::Failed("the other file's project is not connected".into());
                     return;
                 }
             },
@@ -623,7 +624,7 @@ impl DiffView {
             return self.load_compared(other, cx);
         }
         let Some(code) = self.workspace.read(cx).code(&self.spec.root) else {
-            self.loaded = Loaded::Failed("The project is not connected.".into());
+            self.loaded = Loaded::Failed("the project is not connected".into());
             return;
         };
         let mut params = json!({ "path": self.spec.path, "against": self.spec.against });
@@ -841,13 +842,11 @@ impl Render for DiffView {
                     .child(div().text_color(p.bad).child(format!("−{}", self.counts.1))),
             );
         let body = match &self.loaded {
-            Loaded::Reading => note("Reading…", &p).into_any_element(),
+            Loaded::Reading => note("Loading…", &p).into_any_element(),
             Loaded::Failed(e) => {
                 note(format!("Could not read the diff: {e}"), &p).into_any_element()
             }
-            Loaded::Binary => {
-                note("A binary file: its contents are not compared.", &p).into_any_element()
-            }
+            Loaded::Binary => note("Binary files are not compared.", &p).into_any_element(),
             Loaded::Texts { .. } => uniform_list(
                 "diff-rows",
                 self.rows.len(),

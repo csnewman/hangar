@@ -446,9 +446,9 @@ impl Render for PortsView {
             );
             body = body.child(note(
                 if public {
-                    "Anyone who can reach Hangar, without signing in. A port by its number is always private."
+                    "Anyone who can reach Hangar, without signing in. Ports reached by number always require sign-in."
                 } else {
-                    "People who may use this environment, signed in to Hangar."
+                    "Signed-in users with access to this environment."
                 },
                 &p,
             ));
@@ -471,7 +471,7 @@ impl Render for PortsView {
                     match &state {
                         State::Failed(e) => format!("Could not reach the Code service: {e}"),
                         State::Reconnecting(why) => State::reconnecting(why),
-                        _ => "Reading…".into(),
+                        _ => "Loading…".into(),
                     },
                     &p,
                 ))
@@ -480,7 +480,7 @@ impl Render for PortsView {
                 let list = shown(ports);
                 if list.is_empty() {
                     body = body.child(note(
-                        "Nothing listens on a port. A server started in a terminal shows here.",
+                        "No listening ports. Servers started in a terminal appear here.",
                         &p,
                     ));
                 }
@@ -512,7 +512,7 @@ impl Render for PortsView {
 
         if let Some((env, server, Some(suffix))) = &about {
             body = body.child(heading("Web servers", &p));
-            body = body.child(note("Each reaches port 80; HTTPS its 443.", &p));
+            body = body.child(note("HTTP reaches port 80; HTTPS reaches port 443.", &p));
             let names = std::iter::once(None).chain(env.web_names.iter().map(Some));
             for name in names {
                 let url = host_url(server, name.map(String::as_str), &env.short_id, suffix);
@@ -521,7 +521,7 @@ impl Render for PortsView {
             }
         } else if about.is_some() {
             body = body.child(note(
-                "This server has no public address, so the environment's web servers have none either.",
+                "This server has no public address for environment web servers.",
                 &p,
             ));
         }

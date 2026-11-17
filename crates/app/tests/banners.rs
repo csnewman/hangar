@@ -69,11 +69,11 @@ fn a_newer_build_is_upgraded_to_once_stopped_and_compared() {
         (Kind::Image, Tone::Warn, true)
     );
     assert!(b.text.starts_with(
-        "A newer build of base:ubuntu is ready (bbbbbbbbbbbb; this has aaaaaaaaaaaa)."
+        "A newer build of base:ubuntu is available: bbbbbbbbbbbb (current: aaaaaaaaaaaa)."
     ));
     assert!(
         b.text
-            .ends_with("Stop the environment to check what upgrading would leave hidden.")
+            .ends_with("Stop the environment to check for conflicting files.")
     );
     assert_eq!(
         b.acts,
@@ -90,7 +90,7 @@ fn a_newer_build_is_upgraded_to_once_stopped_and_compared() {
     let b = &banners(&e)[0];
     assert!(
         b.text
-            .ends_with("None of its changes hide a file the newer build changes.")
+            .ends_with("No changed files conflict with the newer build.")
     );
     assert!(b.acts[0].ready && b.acts[0].does == upgrade(false));
 }
@@ -102,7 +102,7 @@ fn files_an_upgrade_would_hide_ask_for_it_anyway() {
     let b = &banners(&e)[0];
     assert!(
         b.text
-            .ends_with("5 files it has changed would hide the newer build's.")
+            .ends_with("5 changed files would hide updates from the newer build.")
     );
     assert_eq!(b.files, ["/etc/app.conf", "/usr/lib/x.so", "and 3 more"]);
     assert_eq!(b.acts[0].label, "Upgrade Anyway");
@@ -118,7 +118,7 @@ fn a_change_waiting_is_all_that_is_said_of_the_image() {
     assert_eq!(list.len(), 1);
     assert_eq!(
         list[0].text,
-        "Its next start upgrades base:ubuntu to bbbbbbbbbbbb, keeping a copy of its writable disk to roll back to."
+        "Upgrade scheduled for next start: base:ubuntu to bbbbbbbbbbbb. A copy of the writable disk is kept for rollback."
     );
     assert_eq!(list[0].acts[0].label, "Cancel");
     assert!(!list[0].dismissible);
@@ -145,7 +145,7 @@ fn how_it_differs_from_its_template_is_said_in_words() {
     assert_eq!(b.kind, Kind::Template);
     assert_eq!(
         b.text,
-        "Changed from its template, Rust service: vCPUs, image mapping, image."
+        "Differs from template Rust service: vCPUs, image mapping, image."
     );
     assert_eq!(b.acts[0].does, Does::Reset);
     assert!(b.acts[0].ready);

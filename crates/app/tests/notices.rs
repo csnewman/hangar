@@ -111,7 +111,7 @@ fn an_agent_coming_to_ask_and_a_failure_are_news_once() {
         .iter()
         .map(|x| (x.title.as_str(), x.what.as_str()))
         .collect();
-    assert_eq!(said, [("a", "Claude is asking"), ("b", "failed to start")]);
+    assert_eq!(said, [("a", "Claude is asking"), ("b", "Failed to start")]);
     assert_eq!(news[1].tone, Tone::Bad);
     assert_eq!(news[1].detail, "No worker has room for 16 CPUs");
     // The same again is not news.
@@ -129,7 +129,7 @@ fn a_place_asking_to_be_signed_in_is_news() {
     assert_eq!(news.len(), 1);
     assert_eq!(
         (news[0].title.as_str(), news[0].what.as_str()),
-        ("Acme", "sign in again")
+        ("Acme", "Sign-in required")
     );
     assert!(
         n.observe(&places(Connection::SignIn, vec![]), now())
@@ -150,7 +150,7 @@ fn an_environment_coming_up_is_news_of_its_own_kind() {
     );
     assert_eq!(news.len(), 1);
     assert_eq!(news[0].event, Event::Ready);
-    assert_eq!(news[0].what, "is ready");
+    assert_eq!(news[0].what, "Ready");
     // Running from the start is not news, nor stopping.
     let mut n = Notices::default();
     n.observe(
@@ -222,7 +222,10 @@ fn a_terminals_notification_is_listed_beside_the_rest() {
         ("Build", "done")
     );
     let second = n.terminal("p", &e.id, "a", ("", "tests passed"), now());
-    assert_eq!(second.what, "a terminal notifies", "no heading of its own");
+    assert_eq!(
+        second.what, "Terminal notification",
+        "no heading of its own"
+    );
     let kinds: Vec<Event> = n.list().iter().map(|x| x.event).collect();
     assert_eq!(kinds, [Event::Terminal, Event::Asking]);
     assert_eq!(n.list()[0].detail, "tests passed");

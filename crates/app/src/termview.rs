@@ -767,7 +767,7 @@ impl TerminalView {
             }
             Event::Reconnecting { why, retry_in } => {
                 self.state =
-                    State::Reconnecting(format!("{why}; trying again in {}", seconds(retry_in)));
+                    State::Reconnecting(format!("{why}. Retrying in {}", seconds(retry_in)));
             }
             Event::Exited(code) => {
                 self.state = State::Exited(code);
@@ -876,8 +876,8 @@ impl TerminalView {
     /// The bar asking the user to let the program at the clipboard.
     fn ask_bar(&self, p: &palette::Palette, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let what = match self.asking.as_ref()? {
-            Ask::Copy(_) => "The program asks to copy to the clipboard.",
-            Ask::Read(_) => "The program asks to read the clipboard.",
+            Ask::Copy(_) => "Allow this program to copy to the clipboard?",
+            Ask::Read(_) => "Allow this program to read the clipboard?",
         };
         Some(
             gpui_component::h_flex()
@@ -1435,7 +1435,7 @@ impl TerminalView {
                             .child(viewers.to_string())
                             .tooltip(move |window, cx| {
                                 gpui_component::tooltip::Tooltip::new(format!(
-                                    "{viewers} windows have this terminal open"
+                                    "Open in {viewers} windows"
                                 ))
                                 .build(window, cx)
                             }),
@@ -1511,7 +1511,7 @@ fn hint(link: &LinkKind) -> String {
     };
     match link {
         LinkKind::Url(url) => match local_port(url) {
-            Some((port, _)) => format!("{key} to open port {port} of this environment"),
+            Some((port, _)) => format!("{key} to open port {port} in this environment"),
             None => format!("{key} to open {url}"),
         },
         LinkKind::Embedded { uri, .. } => format!("{key} to open {uri}"),
@@ -1732,7 +1732,7 @@ impl Render for TerminalView {
         let me = cx.entity().downgrade();
         let notice = match &self.state {
             State::Connecting => Some("Connecting…".to_string()),
-            State::Exited(code) => Some(format!("The session has ended ({code}).")),
+            State::Exited(code) => Some(format!("Session ended (exit code {code}).")),
             State::Failed(e) => Some(format!("Could not connect: {e}")),
             State::Reconnecting(why) => Some(format!("Reconnecting: {why}")),
             State::Live => None,
@@ -1905,7 +1905,7 @@ impl Render for TerminalView {
                         .bg(p.surface_2)
                         .child(bar.bg(colour))
                         .tooltip(|window, cx| {
-                            gpui_component::tooltip::Tooltip::new("Progress the program reports")
+                            gpui_component::tooltip::Tooltip::new("Program progress")
                                 .build(window, cx)
                         }),
                 )
@@ -1950,7 +1950,7 @@ impl Render for TerminalView {
                         .child(n)
                         .when(ended, |d| {
                             d.child(
-                                crate::ui::button("start-another", "Start another", &p)
+                                crate::ui::button("start-another", "New Session", &p)
                                     .debug_selector(|| "start-another".into())
                                     .on_click(cx.listener(|t, _, window, cx| {
                                         window.focus(&t.focus, cx);

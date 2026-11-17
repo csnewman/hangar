@@ -358,7 +358,7 @@ impl Languages {
         let why = match &result {
             Err(e) => Some(e.clone()),
             Ok(v) if v.get("untrusted").is_some() => Some(format!(
-                "{} is not trusted to run its code, which its language server would.",
+                "{} is not trusted. Language servers run only in trusted folders.",
                 v["untrusted"].as_str().unwrap_or(&key.0)
             )),
             Ok(v) if v.get("missing").is_some() => {
@@ -366,14 +366,16 @@ impl Languages {
                     .as_array()
                     .and_then(|a| a.first())
                     .and_then(|i| i["install"].as_str())
-                    .map(|i| format!(" Install it with: {i}"))
+                    .map(|i| format!(" Install with: {i}"))
                     .unwrap_or_default();
                 Some(format!(
                     "{}.{install}",
                     v["missing"].as_str().unwrap_or("No server")
                 ))
             }
-            Ok(v) if v["server"].as_u64().is_none() => Some("The service gave no server.".into()),
+            Ok(v) if v["server"].as_u64().is_none() => {
+                Some("The Code service did not start a server.".into())
+            }
             Ok(_) => None,
         };
         if let Some(why) = why {
@@ -500,7 +502,7 @@ impl Languages {
         async move {
             rx.recv()
                 .await
-                .unwrap_or_else(|_| Err("The language server went away.".into()))
+                .unwrap_or_else(|_| Err("The language server stopped.".into()))
         }
     }
 
@@ -670,7 +672,7 @@ impl Languages {
                     let answer = match m.get("error") {
                         Some(e) => Err(e["message"]
                             .as_str()
-                            .unwrap_or("the server failed")
+                            .unwrap_or("the language server returned an error")
                             .to_string()),
                         None => Ok(m.get("result").cloned().unwrap_or(Value::Null)),
                     };

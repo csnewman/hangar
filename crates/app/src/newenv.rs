@@ -31,7 +31,7 @@ pub fn name_problem(name: &str) -> Option<&'static str> {
         return Some("Letters, digits and hyphens only");
     }
     if name.starts_with('-') || name.ends_with('-') {
-        return Some("Not starting or ending with a hyphen");
+        return Some("Cannot start or end with a hyphen");
     }
     None
 }
@@ -312,7 +312,7 @@ impl NewEnvView {
         let t = self.chosen().ok_or("Choose a template")?;
         let name = self.name.read(cx).value().trim().to_string();
         if name.is_empty() {
-            return Err("Give it a name".into());
+            return Err("Enter a name".into());
         }
         if let Some(p) = name_problem(&name) {
             return Err(p.into());
@@ -328,9 +328,9 @@ impl NewEnvView {
                     .parse()
                     .ok()
                     .filter(|n: &i64| *n >= 1)
-                    .ok_or("vCPUs is a whole number, 1 or more")?,
+                    .ok_or("Enter a whole number of vCPUs, 1 or more.")?,
                 memory_mib: parse_gib(&m.memory.read(cx).value())
-                    .ok_or("Memory is a number of GB, such as 4 or 1.5")?,
+                    .ok_or("Enter memory in GB, such as 4 or 1.5.")?,
                 display: m.display.clone(),
                 gpu: m.gpu.clone(),
                 dax: t.dax,
@@ -429,7 +429,7 @@ impl Render for NewEnvView {
         let hint = self.chosen().and_then(|t| t.name_hint.clone());
         let body = v_flex()
             .gap(px(10.))
-            .child(field("Where", &p).child(self.places_list(&p, cx)))
+            .child(field("Place", &p).child(self.places_list(&p, cx)))
             .child(field("Template", &p).child(self.templates_list(&p, window, cx)))
             .child(
                 field("Name", &p).child(
@@ -443,7 +443,7 @@ impl Render for NewEnvView {
                                 .text_size(px(11.))
                                 .text_color(if problem.is_some() { p.bad } else { p.muted })
                                 .child(problem.map(str::to_string).or(hint).unwrap_or_else(|| {
-                                    "It becomes its hostname, in lower case.".into()
+                                    "Used as the hostname, in lower case.".into()
                                 })),
                         ),
                 ),
@@ -459,11 +459,11 @@ impl Render for NewEnvView {
                                 .child(Input::new(&self.branch).small())
                                 .child(div().text_size(px(11.)).text_color(p.muted).child(
                                     format!(
-                                        "Made in {} from {}",
+                                        "Created in {} from {}",
                                         repo_name(&r.url),
                                         r.ref_
                                             .clone()
-                                            .unwrap_or_else(|| "its default branch".into())
+                                            .unwrap_or_else(|| "the default branch".into())
                                     ),
                                 )),
                         ),
@@ -594,9 +594,9 @@ impl NewEnvView {
                         if count == 1 { "" } else { "s" }
                     ),
                 ),
-                Connection::SignIn => (p.busy, "sign in first".into()),
+                Connection::SignIn => (p.busy, "sign-in required".into()),
                 Connection::Connecting => (p.idle, "connecting…".into()),
-                _ => (p.bad, "can't be reached".into()),
+                _ => (p.bad, "unreachable".into()),
             };
             opts = opts.child(
                 opt(
@@ -627,16 +627,13 @@ impl NewEnvView {
     ) -> gpui::AnyElement {
         let list = match &self.templates {
             None if self.place.is_none() => {
-                return note("No place is online to make it in.", p).into_any_element();
+                return note("No place is online.", p).into_any_element();
             }
-            None => return note("Reading its templates…", p).into_any_element(),
+            None => return note("Loading templates…", p).into_any_element(),
             Some(Err(e)) => return div().text_color(p.bad).child(e.clone()).into_any_element(),
             Some(Ok(list)) if list.is_empty() => {
-                return note(
-                    "There are no templates here yet: make one in the browser first.",
-                    p,
-                )
-                .into_any_element();
+                return note("No templates. Create one in the browser first.", p)
+                    .into_any_element();
             }
             Some(Ok(list)) => list.clone(),
         };
@@ -803,7 +800,7 @@ impl NewEnvView {
                     .text_color(p.accent)
                     .cursor_pointer()
                     .hover(|s| s.underline())
-                    .child("Use the template's")
+                    .child("Use template settings")
                     .on_click(
                         cx.listener(|this, _, window, cx| this.change_machine(false, window, cx)),
                     ),

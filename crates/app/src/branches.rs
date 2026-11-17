@@ -426,7 +426,7 @@ impl BranchWidget {
                 let me = cx.entity().downgrade();
                 crate::treeops::confirm(
                     &format!("Delete {name}?"),
-                    "A branch not merged anywhere is kept; git says so.",
+                    "A branch that is not fully merged is not deleted.",
                     "Delete",
                     window,
                     cx,
@@ -720,7 +720,7 @@ impl BranchPopup {
                 .text_color(p.muted)
                 .child(*h)
                 .into_any_element(),
-            Row::More(n) => note(format!("{n} more, type to narrow"), p).into_any_element(),
+            Row::More(n) => note(format!("{n} more. Type to filter."), p).into_any_element(),
             Row::Item {
                 label,
                 hint,

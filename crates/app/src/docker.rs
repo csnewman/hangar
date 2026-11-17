@@ -164,7 +164,7 @@ pub struct Network {
 /// What a list of containers using something says.
 fn used_by(names: &[String]) -> String {
     match names {
-        [] => "no container".into(),
+        [] => "none".into(),
         names => names.join(", "),
     }
 }
@@ -807,7 +807,7 @@ impl DockerView {
                 State::Reconnecting(why) => State::reconnecting(why),
                 _ => match &self.error {
                     Some(e) => e.clone(),
-                    None => "Reading…".into(),
+                    None => "Loading…".into(),
                 },
             };
             return note(text, p);
@@ -1112,7 +1112,7 @@ impl DockerView {
             return div().into_any_element();
         };
         match self.chosen.clone() {
-            None => note("Choose a container to see its log.", p),
+            None => note("Select a container to view its log.", p),
             Some(Chosen::Container(id)) => match o.container(&id).cloned() {
                 Some(c) => self.container_details(c, p, cx),
                 None => div().into_any_element(),
@@ -1341,7 +1341,7 @@ impl DockerView {
                                 .cursor_pointer()
                                 .child(c.id.chars().take(12).collect::<String>())
                                 .tooltip(|window, cx| {
-                                    gpui_component::tooltip::Tooltip::new("Copy It")
+                                    gpui_component::tooltip::Tooltip::new("Copy ID")
                                         .build(window, cx)
                                 })
                                 .on_click(move |_, _, cx| crate::treeops::copy(id.clone(), cx)),
@@ -1521,7 +1521,7 @@ impl DockerView {
             .child(detail(
                 "Used by",
                 match img.containers as usize {
-                    0 => "no container".to_string(),
+                    0 => "none".to_string(),
                     1 => "1 container".to_string(),
                     n => format!("{n} containers"),
                 },
@@ -1807,7 +1807,7 @@ fn confirm_remove(
     };
     crate::treeops::confirm(
         &title,
-        "The container is deleted, with what it wrote outside its volumes.",
+        "The container and any data written outside its volumes will be deleted.",
         ok,
         window,
         cx,
@@ -1820,7 +1820,7 @@ fn confirm_remove(
 fn confirm_down(view: WeakEntity<DockerView>, name: String, window: &mut Window, cx: &mut App) {
     crate::treeops::confirm(
         &format!("Take {name} down?"),
-        "Its containers and networks are removed, as docker compose down does. Its volumes are kept.",
+        "Containers and networks will be removed, as with docker compose down. Volumes are kept.",
         "Down",
         window,
         cx,
@@ -1839,7 +1839,7 @@ fn confirm_remove_image(
 ) {
     crate::treeops::confirm(
         &format!("Remove {name}?"),
-        "The image is deleted; pulling or building it again brings it back.",
+        "The image will be deleted. It can be pulled or built again.",
         "Remove",
         window,
         cx,
@@ -1857,7 +1857,7 @@ fn confirm_remove_volume(
 ) {
     crate::treeops::confirm(
         &format!("Remove {name}?"),
-        "The volume and everything in it are deleted.",
+        "The volume and all its data will be deleted. This cannot be undone.",
         "Remove",
         window,
         cx,
@@ -1876,7 +1876,7 @@ fn confirm_remove_network(
 ) {
     crate::treeops::confirm(
         &format!("Remove {name}?"),
-        "The network is deleted; Compose makes its own again when its project starts.",
+        "The network will be deleted. Compose recreates a project's networks when the project starts.",
         "Remove",
         window,
         cx,

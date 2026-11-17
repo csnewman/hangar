@@ -112,7 +112,7 @@ impl Workspace {
         };
         w.primary = w.connect(PRIMARY, editor, cx);
         if w.primary.is_none() {
-            w.state = State::Failed("This place has no connection.".into());
+            w.state = State::Failed("no connection to this place".into());
         }
         w
     }

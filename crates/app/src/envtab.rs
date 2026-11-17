@@ -62,18 +62,18 @@ impl Tool {
     /// services.
     fn waiting(self) -> &'static str {
         match self {
-            Tool::Project => "The environment's projects and their files.",
-            Tool::Filesystem => "The machine's files, from /.",
-            Tool::Commit => "What has changed, to commit and push.",
-            Tool::Structure => "The open file's outline.",
-            Tool::Terminal => "The environment's terminal sessions, Claude's among them.",
-            Tool::Problems => "What the language servers report.",
+            Tool::Project => "Projects and their files.",
+            Tool::Filesystem => "All files on the machine, from /.",
+            Tool::Commit => "Changes to commit and push.",
+            Tool::Structure => "Outline of the open file.",
+            Tool::Terminal => "Terminal sessions, including those of coding agents.",
+            Tool::Problems => "Diagnostics from language servers.",
             Tool::Git => "Branches, the commit graph and each commit's changes.",
-            Tool::Docker => "The environment's containers, their logs and images.",
-            Tool::Find => "Matches across the projects.",
-            Tool::Log => "The environment's console and its services' logs.",
-            Tool::Ports => "The ports the environment listens on, each with its address.",
-            Tool::Performance => "What the environment uses, its processes and its activity.",
+            Tool::Docker => "Containers, their logs and images.",
+            Tool::Find => "Search results across all projects.",
+            Tool::Log => "Console and service logs.",
+            Tool::Ports => "Listening ports and their addresses.",
+            Tool::Performance => "Resource usage, processes and activity.",
             Tool::Agents => "",
         }
     }
@@ -1133,7 +1133,7 @@ impl EnvTab {
                 let uri = uri.clone();
                 crate::treeops::confirm(
                     &format!("Open {uri}?"),
-                    &format!("The terminal showed this link as “{}”.", text.trim()),
+                    &format!("The link text is “{}”.", text.trim()),
                     "Open",
                     window,
                     cx,
@@ -1157,7 +1157,9 @@ impl EnvTab {
         };
         let Some((server, short, suffix)) = self.hosts(cx) else {
             window.push_notification(
-                Notification::error("This server has no hosts for environments' web servers."),
+                Notification::error(
+                    "This server has no public address for environment web servers.",
+                ),
                 cx,
             );
             return;
@@ -1317,7 +1319,9 @@ impl EnvTab {
         use gpui_component::notification::Notification;
         let Some((server, short, suffix)) = self.hosts(cx) else {
             window.push_notification(
-                Notification::error("This server has no hosts for environments' web servers."),
+                Notification::error(
+                    "This server has no public address for environment web servers.",
+                ),
                 cx,
             );
             return;
@@ -1896,7 +1900,7 @@ impl EnvTab {
         let me = cx.entity().downgrade();
         crate::treeops::confirm(
             &format!("End {label}?"),
-            "A coding agent is working in it, and ends with the session.",
+            "A coding agent is working in this session. Ending the session stops the agent.",
             "End Session",
             window,
             cx,
@@ -2336,9 +2340,9 @@ impl EnvTab {
             use gpui_component::WindowExt;
             window.push_notification(
                 gpui_component::notification::Notification::info(if forward {
-                    "No more matches after this one"
+                    "No more matches"
                 } else {
-                    "No matches before this one"
+                    "No previous matches"
                 }),
                 cx,
             );
@@ -3073,7 +3077,7 @@ impl EnvTab {
         let me = cx.entity().downgrade();
         crate::treeops::confirm(
             &format!("End {label}?"),
-            "A coding agent is working in it, and ends with the session.",
+            "A coding agent is working in this session. Ending the session stops the agent.",
             "End Session",
             window,
             cx,
@@ -3107,7 +3111,9 @@ impl EnvTab {
         let me = cx.entity().downgrade();
         crate::treeops::confirm(
             &format!("End {n} other session{}?", if n == 1 { "" } else { "s" }),
-            &format!("A coding agent is working in {agents} of them, and ends with its session."),
+            &format!(
+                "A coding agent is working in {agents} of them. Ending the sessions stops the agents."
+            ),
             "End Sessions",
             window,
             cx,
@@ -3300,13 +3306,16 @@ impl Render for EnvTab {
         }
         let p = palette::of(cx);
         if self.places.read(cx).get(&self.place).is_none() {
-            return div().p_4().child("This place is gone.").into_any_element();
+            return div()
+                .p_4()
+                .child("This place has been removed.")
+                .into_any_element();
         }
         let Some((_, env)) = self.shown(cx) else {
             return div()
                 .p_4()
                 .text_color(p.muted)
-                .child("This environment has been deleted, or is out of reach.")
+                .child("This environment has been deleted or cannot be reached.")
                 .into_any_element();
         };
 
@@ -3869,7 +3878,7 @@ impl EnvTab {
                     .unwrap_or_default();
                 crate::treeops::confirm(
                     &format!("Reset {name} to its template?"),
-                    "It takes its template's current settings; its disks and everything on them are kept.",
+                    "Applies the template's current settings. Disks and their data are kept.",
                     "Reset",
                     window,
                     cx,
@@ -3965,7 +3974,7 @@ impl EnvTab {
                         .disabled(!stopped)
                         .on_click(ask(
                             format!("Reset {name} to its template?"),
-                            "It takes its template's current settings; its disks and everything on them are kept.",
+                            "Applies the template's current settings. Disks and their data are kept.",
                             "Reset",
                             model::Action::Reset,
                         )),
@@ -3977,7 +3986,7 @@ impl EnvTab {
                 .separator()
                 .item(PopupMenuItem::new("Delete…").on_click(ask(
                     format!("Delete {name}?"),
-                    "Its disks and everything on them go with it. This cannot be undone.",
+                    "Its disks and all data on them will be deleted. This cannot be undone.",
                     "Delete",
                     model::Action::Delete,
                 )))
@@ -4049,7 +4058,7 @@ impl EnvTab {
                     )))
                     .when(env.task.is_some(), |d| {
                         let (place, id) = (place.clone(), id.clone());
-                        d.child(button("task-done", "Mark done", p).on_click(cx.listener(
+                        d.child(button("task-done", "Mark Done", p).on_click(cx.listener(
                             move |t, _, _, cx| {
                                 t.task_edit = None;
                                 t.places
@@ -4622,7 +4631,7 @@ impl EnvTab {
                 div()
                     .text_size(px(11.5))
                     .text_color(p.muted)
-                    .child("No coding agent is running here. Start Claude Code in a terminal and it shows here."),
+                    .child("No coding agents are running. Agents started in a terminal, such as Claude Code, appear here."),
             );
         }
         for a in sessions {
@@ -4713,7 +4722,7 @@ impl EnvTab {
                                 div()
                                     .text_size(px(11.))
                                     .text_color(p.muted)
-                                    .child("Answer it where it runs."),
+                                    .child("Respond in the session where the agent runs."),
                             )
                         })
                     })
@@ -4722,7 +4731,7 @@ impl EnvTab {
                             h_flex().child(
                                 button(
                                     SharedString::from(format!("open-{}", a.id)),
-                                    "Open session",
+                                    "Open Session",
                                     p,
                                 )
                                 .py(px(1.))
@@ -4989,7 +4998,7 @@ impl EnvTab {
                         .ghost()
                         .xsmall()
                         .icon(gpui_component::Icon::empty().path(assets::icon("chevron-down")))
-                        .tooltip("Every open file")
+                        .tooltip("All Open Files")
                         .dropdown_menu_with_anchor(
                             gpui::Anchor::TopRight,
                             move |mut menu, _, cx| {
@@ -5416,7 +5425,7 @@ impl EnvTab {
                             .rounded(px(4.))
                             .cursor_pointer()
                             .hover(|s| s.bg(p.surface_2))
-                            .child("New session")
+                            .child("New Session")
                             .on_click(cx.listener(|t, _, window, cx| t.new_terminal(window, cx))),
                     );
                 if list.is_empty() {
@@ -5545,8 +5554,7 @@ impl EnvTab {
                         .child(format!("{} ms", ms.round()))
                         .tooltip(|window, cx| {
                             gpui_component::tooltip::Tooltip::new(
-                                "How long a request takes to reach the environment and come \
-                                 back, through Hangar's server and its worker",
+                                "Round-trip time to the environment through the Hangar server and worker",
                             )
                             .build(window, cx)
                         }),

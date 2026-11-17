@@ -52,10 +52,10 @@ impl AccountView {
     pub fn new(client: Option<Client>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let pasted = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("ssh-ed25519 AAAA… name, as in ~/.ssh/id_ed25519.pub")
+                .placeholder("ssh-ed25519 AAAA… comment (contents of ~/.ssh/id_ed25519.pub)")
         });
         let key_name =
-            cx.new(|cx| InputState::new(window, cx).placeholder("A name, such as github"));
+            cx.new(|cx| InputState::new(window, cx).placeholder("Key name, e.g. github"));
         let mut view = AccountView {
             client,
             read: None,
@@ -73,7 +73,7 @@ impl AccountView {
     /// Reads everything again from the place.
     fn reload(&mut self, cx: &mut Context<Self>) {
         let Some(client) = self.client.clone() else {
-            self.error = Some("Sign in to this place to see your account there.".into());
+            self.error = Some("Sign in to this place to view your account.".into());
             return;
         };
         let task = cx.background_spawn(async move {
@@ -136,7 +136,7 @@ impl AccountView {
     fn make_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let name = self.key_name.read(cx).value().trim().to_string();
         if name.is_empty() {
-            self.error = Some("Name the key first.".into());
+            self.error = Some("Enter a name for the key.".into());
             cx.notify();
             return;
         }
@@ -202,7 +202,7 @@ impl Render for AccountView {
         }
         let Some(read) = &self.read else {
             return page.child(div().text_color(p.muted).child(if self.client.is_some() {
-                "Reading your account…"
+                "Loading account…"
             } else {
                 ""
             }));
@@ -239,7 +239,7 @@ impl Render for AccountView {
 
         // Sign-in keys, and this computer's own keys not among them.
         page = page.child(section("Sign-in keys", &p)).child(note(
-            "Public keys that sign you in to this place's SSH gateway.",
+            "Public keys for signing in to this place's SSH gateway.",
             &p,
         ));
         let mut list = v_flex().gap(px(4.));
@@ -273,7 +273,7 @@ impl Render for AccountView {
             );
         }
         if login_keys.is_empty() {
-            list = list.child(div().text_color(p.muted).child("None yet."));
+            list = list.child(div().text_color(p.muted).child("No sign-in keys."));
         }
         page = page.child(list);
         let offered: Vec<(String, String)> = self
@@ -286,7 +286,7 @@ impl Render for AccountView {
             let label = line
                 .split_whitespace()
                 .nth(2)
-                .unwrap_or("this computer's key")
+                .unwrap_or("unnamed key")
                 .to_string();
             let add = line.clone();
             page = page.child(
@@ -295,12 +295,12 @@ impl Render for AccountView {
                     .child(
                         div()
                             .text_color(p.muted)
-                            .child(format!("This computer has {label}")),
+                            .child(format!("Found in ~/.ssh: {label}")),
                     )
                     .child(
                         button(
                             SharedString::from(format!("login-add-local-{label}")),
-                            "Add It",
+                            "Add",
                             &p,
                         )
                         .on_click(cx.listener(
@@ -323,7 +323,7 @@ impl Render for AccountView {
 
         // The keys the place signs with.
         page = page.child(section("SSH keys", &p)).child(note(
-            "Keys this place keeps and signs with for you, through the agent in each of your environments. Their private halves never enter one: add a key's public half where it should let you in, such as GitHub.",
+            "Keys stored by this place and used through the SSH agent in your environments. Private keys never enter an environment; add the public key where access is needed, such as GitHub.",
             &p,
         ));
         let mut list = v_flex().gap(px(4.));
@@ -363,23 +363,23 @@ impl Render for AccountView {
             );
         }
         if ssh_keys.is_empty() {
-            list = list.child(div().text_color(p.muted).child("None yet."));
+            list = list.child(div().text_color(p.muted).child("No SSH keys."));
         }
         page = page.child(list).child(
             h_flex()
                 .gap(px(8.))
                 .child(div().w(px(240.)).child(Input::new(&self.key_name).small()))
                 .child(if self.busy {
-                    disabled("ssh-make", "Make a Key", &p)
+                    disabled("ssh-make", "Generate Key", &p)
                 } else {
-                    button("ssh-make", "Make a Key", &p)
+                    button("ssh-make", "Generate Key", &p)
                         .on_click(cx.listener(|this, _, window, cx| this.make_key(window, cx)))
                 }),
         );
 
         // Access tokens.
         page = page.child(section("Access tokens", &p)).child(note(
-            "Tokens sign tools in. The app's own is kept in the keychain; revoking it signs the app out of this place.",
+            "Tokens authenticate tools and scripts. This app's token is stored in the keychain; revoking it signs the app out of this place.",
             &p,
         ));
         let mut list = v_flex().gap(px(4.));
@@ -409,7 +409,7 @@ impl Render for AccountView {
                             .truncate()
                             .text_color(p.muted)
                             .child(format!(
-                                "made {} · {used}{expires}",
+                                "created {} · {used}{expires}",
                                 t.created_at.format("%-d %b %Y")
                             )),
                     )
@@ -423,11 +423,11 @@ impl Render for AccountView {
             );
         }
         if tokens.is_empty() {
-            list = list.child(div().text_color(p.muted).child("None."));
+            list = list.child(div().text_color(p.muted).child("No access tokens."));
         }
         page.child(list).child(
             h_flex().child(
-                primary("account-reload", "Read Again", &p)
+                primary("account-reload", "Refresh", &p)
                     .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
             ),
         )

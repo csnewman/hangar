@@ -70,10 +70,10 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Unauthorized => write!(f, "not signed in"),
-            Error::Status(code, msg) if msg.is_empty() => write!(f, "the server answered {code}"),
+            Error::Status(code, msg) if msg.is_empty() => write!(f, "server returned HTTP {code}"),
             Error::Status(code, msg) => write!(f, "{msg} ({code})"),
             Error::Transport(msg) => write!(f, "{msg}"),
-            Error::Decode(msg) => write!(f, "an answer the app does not understand: {msg}"),
+            Error::Decode(msg) => write!(f, "unexpected response: {msg}"),
         }
     }
 }
@@ -555,7 +555,7 @@ impl Client {
             pages += 1;
             if pages > MAX_PAGES {
                 return Err(Error::Decode(format!(
-                    "a list of more than {MAX_PAGES} pages"
+                    "list has more than {MAX_PAGES} pages"
                 )));
             }
             let (more, after) = self.page::<P>(&path)?.parts();
@@ -714,7 +714,7 @@ impl Read for StreamReader {
                 Err(_) => {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        "the event stream went quiet",
+                        "event stream timed out",
                     ));
                 }
                 Ok(None) => return Ok(0),
@@ -800,7 +800,7 @@ impl<R: BufRead> Iterator for Events<R> {
 }
 
 fn parse(name: &str, data: &str) -> Result<Option<Event>, Error> {
-    let decode = |e: serde_json::Error| Error::Decode(format!("a {name} event: {e}"));
+    let decode = |e: serde_json::Error| Error::Decode(format!("invalid {name} event: {e}"));
     Ok(Some(match name {
         "environment" => Event::Environment(Box::new(serde_json::from_str(data).map_err(decode)?)),
         "removed" => {

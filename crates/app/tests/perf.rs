@@ -66,7 +66,7 @@ fn event(action: &str, details: serde_json::Value) -> ActivityEvent {
 fn activity_is_told_in_words_and_looks_are_left_out() {
     assert_eq!(
         describe(&event("environment.start", json!({ "from": "suspended" }))),
-        ("resumed it".to_string(), None)
+        ("resumed the environment".to_string(), None)
     );
     assert_eq!(
         describe(&event(
@@ -74,7 +74,7 @@ fn activity_is_told_in_words_and_looks_are_left_out() {
             json!({ "memory_mib": { "from": 2048, "to": 4096 }, "cpus": { "from": 2, "to": 2 } })
         )),
         (
-            "changed its settings".to_string(),
+            "changed settings".to_string(),
             Some("memory 2 GB → 4 GB".to_string())
         )
     );

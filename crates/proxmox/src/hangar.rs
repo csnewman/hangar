@@ -65,13 +65,13 @@ pub fn check_prefix(prefix: &str) -> Result<(), String> {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
     if !ok {
         return Err(format!(
-            "proxmox prefix {prefix:?}: 1 to 20 lowercase letters, digits and hyphens, \
-             starting with a letter and not ending with a hyphen"
+            "proxmox prefix {prefix:?}: must be 1-20 lowercase letters, digits or hyphens, \
+             start with a letter and not end with a hyphen"
         ));
     }
     if prefix.split('-').any(|w| ISO_KINDS.contains(&w)) {
         return Err(format!(
-            "proxmox prefix {prefix:?}: it may not have {} as a word, which name kinds of ISO",
+            "proxmox prefix {prefix:?}: must not contain the word {}",
             ISO_KINDS.join(" or ")
         ));
     }
@@ -540,7 +540,7 @@ impl Proxmox {
                 c.needs.push(Need {
                     ok: false,
                     says: format!(
-                        "See node {name}'s free memory (Sys.Audit on /nodes/{name}), which Hangar sizes environments by"
+                        "Node {name}: memory not visible (requires Sys.Audit on /nodes/{name})"
                     ),
                 });
             }
@@ -602,32 +602,32 @@ impl Proxmox {
         let net = first(&|n| n.networks.first().map(|s| s.name.clone()));
         vec![
             match pool {
-                Some(p) => Need { ok: true, says: format!("Make and run VMs in pool {p}") },
+                Some(p) => Need { ok: true, says: format!("VMs: pool {p}") },
                 None if lacking.is_empty() => Need {
                     ok: false,
-                    says: "Make and run VMs in a pool: it sees none (PVEVMAdmin, Pool.Allocate and Pool.Audit on /pool/<name>)".into(),
+                    says: "VMs: no pool available (requires PVEVMAdmin, Pool.Allocate and Pool.Audit on /pool/<name>)".into(),
                 },
-                None => Need { ok: false, says: format!("Make and run VMs in a pool: it lacks {lacking}") },
+                None => Need { ok: false, says: format!("VMs: missing {lacking}") },
             },
             match disks {
-                Some(d) => Need { ok: true, says: format!("Disks on {d}") },
+                Some(d) => Need { ok: true, says: format!("Disk storage: {d}") },
                 None => Need {
                     ok: false,
-                    says: "Disks on a storage for VM images (Datastore.AllocateSpace on /storage/<id>)".into(),
+                    says: "Disk storage: none available (requires Datastore.AllocateSpace on /storage/<id>)".into(),
                 },
             },
             match isos {
-                Some(d) => Need { ok: true, says: format!("ISOs on {d}") },
+                Some(d) => Need { ok: true, says: format!("ISO storage: {d}") },
                 None => Need {
                     ok: false,
-                    says: "ISOs on a storage for them (Datastore.AllocateTemplate and Datastore.Audit on /storage/<id>)".into(),
+                    says: "ISO storage: none available (requires Datastore.AllocateTemplate and Datastore.Audit on /storage/<id>)".into(),
                 },
             },
             match net {
-                Some(n) => Need { ok: true, says: format!("Join network {n}") },
+                Some(n) => Need { ok: true, says: format!("Network: {n}") },
                 None => Need {
                     ok: false,
-                    says: "Join a network (SDN.Use on /sdn/zones/localnetwork/<bridge>)".into(),
+                    says: "Network: none available (requires SDN.Use on /sdn/zones/localnetwork/<bridge>)".into(),
                 },
             },
         ]

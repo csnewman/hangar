@@ -286,11 +286,11 @@ impl Event {
         match self {
             Event::Asking => "An agent asks a question",
             Event::Finished => "An agent finishes",
-            Event::Failed => "An environment fails",
+            Event::Failed => "An environment fails to start",
             Event::Ready => "An environment is ready",
-            Event::SignIn => "A place needs signing in",
+            Event::SignIn => "A place requires sign-in",
             Event::Image => "A newer image is available",
-            Event::Terminal => "A program in a terminal notifies",
+            Event::Terminal => "A terminal program sends a notification",
         }
     }
 }

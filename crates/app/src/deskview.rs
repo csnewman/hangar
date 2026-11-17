@@ -350,7 +350,7 @@ impl Render for DesktopView {
                         .child("Paste Clipboard")
                         .tooltip(|window, cx| {
                             gpui_component::tooltip::Tooltip::new(
-                                "Put this computer's clipboard on the desktop's (Cmd-V does, and pastes)",
+                                "Send the clipboard to the desktop. Cmd-V sends it and pastes.",
                             )
                             .build(window, cx)
                         })
@@ -367,7 +367,7 @@ impl Render for DesktopView {
                         .id("desktop-reconnect")
                         .text_color(p.accent)
                         .cursor_pointer()
-                        .child("Connect Again")
+                        .child("Reconnect")
                         .on_click(cx.listener(|v, _, _, cx| v.connect(cx))),
                 )
             });

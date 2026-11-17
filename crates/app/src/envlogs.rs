@@ -23,27 +23,23 @@ pub const LOGS: [(&str, &str, &str); 5] = [
     (
         "combined",
         "Combined",
-        "Every log below as one, each line marked with the log it is from, in the order the worker saw them written.",
+        "All logs interleaved in the order they were written, each line marked with its source.",
     ),
     (
         "console",
         "Console",
-        "The machine's serial console: the kernel, Hangar's init assembling the root, and systemd.",
+        "Serial console output from the kernel, Hangar's init and systemd.",
     ),
     (
         "worker",
         "Worker",
-        "What its worker logged about it: each step of starting, and any error.",
+        "Worker messages about this environment, including start-up steps and errors.",
     ),
-    (
-        "monitor",
-        "Monitor",
-        "The virtual machine monitor's own log.",
-    ),
+    ("monitor", "Monitor", "Virtual machine monitor log."),
     (
         "gpu",
         "GPU",
-        "The virtual GPU's backend, for an environment with one.",
+        "Virtual GPU backend log, for environments with a GPU.",
     ),
 ];
 
@@ -86,7 +82,7 @@ impl LogsView {
             client,
             env: env.to_string(),
             chosen: LOGS[0].0,
-            pane: cx.new(|cx| LogPane::new("env-log", "Reading…", cx)),
+            pane: cx.new(|cx| LogPane::new("env-log", "Loading…", cx)),
             next: None,
             earlier: false,
             error: None,
@@ -127,7 +123,7 @@ impl LogsView {
         self.reading = false;
         self.pane.update(cx, |p, cx| {
             p.clear(cx);
-            p.set_empty("Reading…", cx);
+            p.set_empty("Loading…", cx);
         });
         self.read(cx);
         cx.notify();
@@ -192,7 +188,7 @@ impl LogsView {
         }
         self.next = Some(part.next);
         let empty = if part.missing.unwrap_or_default() {
-            "There is no such log here yet."
+            "This log is not available yet."
         } else {
             "Nothing logged yet."
         };
@@ -231,7 +227,7 @@ impl Render for LogsView {
                     .ml(px(8.))
                     .text_size(px(11.))
                     .text_color(p.muted)
-                    .child("Its oldest lines are gone."),
+                    .child("Older lines have been discarded."),
             );
         }
         if let Some(e) = &self.error {

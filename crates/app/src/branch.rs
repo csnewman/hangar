@@ -311,7 +311,7 @@ impl BranchView {
             out = out.child(list);
         }
         let c = match &s.changes {
-            None => return out.child(muted("Reading…", p)),
+            None => return out.child(muted("Loading…", p)),
             Some(Err(e)) => return out.child(muted(e.clone(), p)),
             Some(Ok(c)) => c,
         };
@@ -394,7 +394,7 @@ impl BranchView {
                 .child(c.changes.len().to_string()),
         );
         if c.changes.is_empty() {
-            out = out.child(muted(format!("Nothing differs from {}.", c.base), p));
+            out = out.child(muted(format!("No differences from {}.", c.base), p));
         }
         for (i, f) in c.changes.iter().enumerate() {
             out = out.child(self.file(key, c, i, f, p, cx));
@@ -520,7 +520,7 @@ impl Render for BranchView {
         let mut list = v_flex();
         if self.order.is_empty() {
             list = list.child(muted(
-                "No git repository in the environment's projects.",
+                "No Git repositories in the environment's projects.",
                 &p,
             ));
         }

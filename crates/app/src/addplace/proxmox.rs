@@ -193,8 +193,9 @@ impl AddPlaceView {
     pub fn pve_probe(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let typed = self.pve.url.read(cx).value().to_string();
         let Some(api) = api_url(&typed) else {
-            self.error =
-                Some("That is not a Proxmox's address: its host, and :8006 or its port.".into());
+            self.error = Some(
+                "Invalid address. Enter a host name or IP address, optionally with a port.".into(),
+            );
             cx.notify();
             return;
         };
@@ -215,7 +216,7 @@ impl AddPlaceView {
                         v.pve.api = api;
                         v.pve.fingerprint = fp;
                     }
-                    Err(e) => v.error = Some(format!("{api} did not answer: {e}")),
+                    Err(e) => v.error = Some(format!("Could not connect to {api}: {e}")),
                 }
                 cx.notify();
             });
@@ -228,10 +229,7 @@ impl AddPlaceView {
         let id = self.pve.token_id.read(cx).value().trim().to_string();
         let secret = self.pve.secret.read(cx).value().trim().to_string();
         if !id.contains('!') || secret.is_empty() {
-            self.error = Some(
-                "A token's ID is user@realm!name, as Proxmox shows it, with the secret it showed once."
-                    .into(),
-            );
+            self.error = Some("Enter the token ID (user@realm!name) and its secret.".into());
             cx.notify();
             return;
         }
@@ -272,7 +270,7 @@ impl AddPlaceView {
                     Err(e) => {
                         v.error = Some(match e.kind() {
                             std::io::ErrorKind::PermissionDenied => {
-                                "Proxmox refused the token: check its ID and secret.".into()
+                                "Authentication failed. Check the token ID and secret.".into()
                             }
                             _ => e.to_string(),
                         })
@@ -329,10 +327,13 @@ impl AddPlaceView {
     fn pve_prefix_problem(&self, cx: &gpui::App) -> Option<String> {
         let p = self.pve.prefix.read(cx).value().to_string();
         if let Err(e) = hangar::check_prefix(&p) {
-            return Some(e.trim_start_matches("proxmox prefix ").to_string());
+            return Some(format!(
+                "Prefix {}",
+                e.split_once(": ").map_or(e.as_str(), |(_, why)| why)
+            ));
         }
         let used = self.pve.choices.as_ref()?.prefixes.contains(&p);
-        used.then(|| format!("Another Hangar on this Proxmox uses {p}."))
+        used.then(|| format!("Prefix {p} is already in use on this Proxmox."))
     }
 
     /// Makes the Hangar: the release fetched, then made on the Proxmox,
@@ -353,7 +354,7 @@ impl AddPlaceView {
         };
         self.go(Step::Making, cx);
         self.pve.done.clear();
-        self.pve.now = Some("Downloading Hangar's release".into());
+        self.pve.now = Some("Downloading release".into());
         let dir = crate::store::Dirs::user()
             .map(|d| d.cache.join("proxmox-release"))
             .unwrap_or_else(|| std::env::temp_dir().join("hangar-proxmox-release"));
@@ -365,15 +366,13 @@ impl AddPlaceView {
                 let release = match hangar::fetch_release(&image, &dir) {
                     Ok(r) => r,
                     Err(e) => {
-                        let _ = tx.send_blocking(Made2::Failed(format!(
-                            "Downloading Hangar's release: {e}"
-                        )));
+                        let _ = tx.send_blocking(Made2::Failed(format!("Download failed: {e}")));
                         return;
                     }
                 };
                 let short: String = release.version.chars().take(7).collect();
                 let _ = tx.send_blocking(Made2::Step(format!(
-                    "Downloaded Hangar's release, {short} · {} MB",
+                    "Downloaded release {short} ({} MB)",
                     std::fs::metadata(&release.file)
                         .map(|m| m.len() >> 20)
                         .unwrap_or(0)
@@ -384,17 +383,15 @@ impl AddPlaceView {
                 let r = crate::api::runtime().block_on(pve.make(&plan, &release, &move |s| {
                     let line = match s {
                         hangar::Step::Uploading { name } => {
-                            format!("Uploading it to {isos} as {name}")
+                            format!("Uploading {name} to {isos}")
                         }
                         hangar::Step::Making { vmid } => {
-                            format!("Making VM {vmid}, {prefix}-hangar, in pool {pool}")
+                            format!("Creating VM {vmid} ({prefix}-hangar) in pool {pool}")
                         }
-                        hangar::Step::Starting => "Starting it".into(),
-                        hangar::Step::Settings => {
-                            "Giving it its settings through the guest agent".into()
-                        }
-                        hangar::Step::Address => "Waiting for its address".into(),
-                        hangar::Step::Answering { url } => format!("Waiting for Hangar at {url}"),
+                        hangar::Step::Starting => "Starting VM".into(),
+                        hangar::Step::Settings => "Applying settings".into(),
+                        hangar::Step::Address => "Waiting for IP address".into(),
+                        hangar::Step::Answering { url } => format!("Waiting for {url}"),
                     };
                     let _ = say.send_blocking(Made2::Step(line));
                 }));
@@ -510,7 +507,7 @@ impl AddPlaceView {
                     .gap(px(8.))
                     .child(
                         div().text_color(p.muted).child(
-                            "Its address, as you reach its web page. The app makes a Hangar of your own there: a VM with Hangar's server and worker, its environments VMs beside it.",
+                            "Enter the address of the Proxmox web interface. A VM running the Hangar server and worker will be created; environments run as separate VMs.",
                         ),
                     )
                     .child(Input::new(&self.pve.url))
@@ -522,7 +519,7 @@ impl AddPlaceView {
                                 .rounded(px(6.))
                                 .border_1()
                                 .border_color(p.border)
-                                .child(div().child("Proxmox made its own certificate:"))
+                                .child(div().child("Certificate fingerprint (SHA-256)"))
                                 .child(
                                     div()
                                         .id("pve-fingerprint")
@@ -533,15 +530,15 @@ impl AddPlaceView {
                                         .child(hangar::show_fingerprint(&self.pve.fingerprint)),
                                 )
                                 .child(div().text_color(p.muted).text_size(px(11.5)).child(
-                                    "Is it the one Proxmox shows under Datacenter › your node › System › Certificates? The app will take only this one.",
+                                    "Compare with Datacenter › Node › System › Certificates. Only this certificate will be trusted.",
                                 )),
                         )
                     }),
             )
             .child(self.error_line(p))
-            .child(future_step("2", "An API token", p))
-            .child(future_step("3", "Where it goes", p))
-            .child(future_step("4", "Name it", p))
+            .child(future_step("2", "API token", p))
+            .child(future_step("3", "Placement", p))
+            .child(future_step("4", "Name", p))
             .child(
                 h_flex()
                     .gap(px(8.))
@@ -553,7 +550,7 @@ impl AddPlaceView {
                     .child(if self.busy {
                         disabled("pve-continue", "Checking…", p).into_any_element()
                     } else if seen {
-                        primary("pve-matches", "It Matches", p)
+                        primary("pve-matches", "Trust Certificate", p)
                             .on_click(cx.listener(|this, _, _, cx| this.go(Step::ProxmoxToken, cx)))
                             .into_any_element()
                     } else {
@@ -574,7 +571,7 @@ impl AddPlaceView {
             .unwrap_or_default();
         done_step(
             "Proxmox",
-            format!("{}{version} · certificate matched", self.pve.host()),
+            format!("{}{version} · certificate trusted", self.pve.host()),
             p,
         )
     }
@@ -584,13 +581,13 @@ impl AddPlaceView {
         v_flex()
             .gap(px(10.))
             .child(self.pve_done_address(p))
-            .child(now_step("2", "An API token", p))
+            .child(now_step("2", "API token", p))
             .child(
                 v_flex()
                     .pl(px(26.))
                     .gap(px(8.))
                     .child(div().text_color(p.muted).child(
-                        "Made in Datacenter › Permissions › API Tokens, by you or whoever runs this Proxmox: rights to a pool, a storage for disks and one for ISOs, and a network; nothing on the host itself.",
+                        "Create a token under Datacenter › Permissions › API Tokens. It needs access to a pool, a disk storage, an ISO storage and a network bridge; no host-level permissions.",
                     ))
                     .child(field("Token ID", p).child(Input::new(&self.pve.token_id)))
                     .child(field("Secret", p).child(Input::new(&self.pve.secret)))
@@ -604,8 +601,8 @@ impl AddPlaceView {
                     }),
             )
             .child(self.error_line(p))
-            .child(future_step("3", "Where it goes", p))
-            .child(future_step("4", "Name it", p))
+            .child(future_step("3", "Placement", p))
+            .child(future_step("4", "Name", p))
             .child(
                 h_flex()
                     .gap(px(8.))
@@ -646,11 +643,7 @@ impl AddPlaceView {
             .and_then(|c| c.pools.get(self.pve.pool))
             .map(|(p, _)| p.clone())
             .unwrap_or_default();
-        done_step(
-            "An API token",
-            format!("{id} · may make VMs in pool {pool}"),
-            p,
-        )
+        done_step("API token", format!("{id} · pool {pool}"), p)
     }
 
     fn pve_where(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
@@ -664,7 +657,7 @@ impl AddPlaceView {
                 .items_start()
                 .child(
                     div()
-                        .w(px(64.))
+                        .w(px(84.))
                         .flex_none()
                         .pt(px(4.))
                         .text_color(p.muted)
@@ -738,21 +731,21 @@ impl AddPlaceView {
             .gap(px(10.))
             .child(self.pve_done_address(p))
             .child(self.pve_done_token(p))
-            .child(now_step("3", "Where it goes", p))
+            .child(now_step("3", "Placement", p))
             .child(
                 v_flex()
                     .pl(px(26.))
                     .gap(px(8.))
                     .child(div().text_color(p.muted).child(
-                        "Its environments go in the same places, each a VM of its own on the network you choose, its address from your DHCP.",
+                        "Environments are created as separate VMs in the same pool and storage, on the selected network (DHCP).",
                     ))
                     .child(options("Node", nodes, self.pve.node, Which::Node))
-                    .child(options("Disks", disks, self.pve.disks, Which::Disks))
-                    .child(options("ISOs", isos, self.pve.isos, Which::Isos))
+                    .child(options("Disk storage", disks, self.pve.disks, Which::Disks))
+                    .child(options("ISO storage", isos, self.pve.isos, Which::Isos))
                     .child(options("Network", nets, self.pve.network, Which::Network))
                     .child(options("Pool", pools, self.pve.pool, Which::Pool)),
             )
-            .child(future_step("4", "Name it", p))
+            .child(future_step("4", "Name", p))
             .child(
                 h_flex()
                     .gap(px(8.))
@@ -776,9 +769,9 @@ impl AddPlaceView {
     fn pve_done_where(&self, p: &Palette) -> AnyElement {
         let plan = self.pve.plan("x").unwrap_or_default();
         done_step(
-            "Where it goes",
+            "Placement",
             format!(
-                "node {} · disks on {} · ISOs on {} · {} · pool {}",
+                "node {} · disk storage {} · ISO storage {} · network {} · pool {}",
                 plan.node, plan.disks, plan.isos, plan.network, plan.pool
             ),
             p,
@@ -800,7 +793,7 @@ impl AddPlaceView {
             .child(self.pve_done_address(p))
             .child(self.pve_done_token(p))
             .child(self.pve_done_where(p))
-            .child(now_step("4", "Name it", p))
+            .child(now_step("4", "Name", p))
             .child(
                 v_flex()
                     .pl(px(26.))
@@ -810,22 +803,22 @@ impl AddPlaceView {
                     .child(match &problem {
                         Some(why) => div().text_size(px(11.5)).text_color(p.bad).child(why.clone()),
                         None => div().text_size(px(11.5)).text_color(p.muted).child(format!(
-                            "Everything it makes on this Proxmox is named after it: its VM {prefix}-hangar, its environments' VMs, its ISOs; it touches nothing else.{}",
+                            "VMs and ISOs it creates are named with this prefix (VM {prefix}-hangar). Nothing else on the Proxmox is modified.{}",
                             if others.is_empty() {
                                 String::new()
                             } else {
-                                format!(" Other Hangars here use {}.", others.join(", "))
+                                format!(" Prefixes in use: {}.", others.join(", "))
                             }
                         )),
                     })
                     .child(
-                        field("Its VM", p).child(div().child(format!(
-                            "{CORES} vCPUs · {} GB · {DATA_GIB} GB data disk",
+                        field("VM size", p).child(div().child(format!(
+                            "{CORES} vCPUs · {} GB RAM · {DATA_GIB} GB disk",
                             MEMORY_MIB / 1024
                         ))),
                     )
                     .child(div().text_size(px(11.5)).text_color(p.muted).child(
-                        "For Hangar itself. Environments are VMs of their own, sized by their templates.",
+                        "Environment VMs are sized by their templates.",
                     )),
             )
             .child(self.error_line(p))
@@ -839,10 +832,10 @@ impl AddPlaceView {
                         ),
                     )
                     .child(if problem.is_none() && named {
-                        primary("pve-make", "Make It", p)
+                        primary("pve-make", "Create", p)
                             .on_click(cx.listener(|this, _, _, cx| this.pve_make(cx)))
                     } else {
-                        disabled("pve-make", "Make It", p)
+                        disabled("pve-make", "Create", p)
                     }),
             )
             .into_any_element()
@@ -870,7 +863,7 @@ impl AddPlaceView {
             .child(self.error_line(p))
             .when(!failed, |d| {
                 d.child(div().text_size(px(11.5)).text_color(p.muted).child(
-                    "About half a minute. It shows in the list as soon as Hangar answers; its first environment takes a minute more, for the base image.",
+                    "This usually takes about 30 seconds. The first environment takes about a minute longer while its base image downloads.",
                 ))
             })
             .when(failed, |d| {

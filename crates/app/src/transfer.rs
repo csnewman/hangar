@@ -153,12 +153,9 @@ pub fn ask(
                     .gap(px(10.))
                     .child(field("New name", &asked.name))
                     .child(field("To folder", &asked.folder))
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(p.muted)
-                            .child("A path from the file's own folder, or from /. It is made if it is not there."),
-                    )
+                    .child(div().text_size(px(11.)).text_color(p.muted).child(
+                        "Relative to the file's folder, or absolute. Created if it does not exist.",
+                    ))
                     .when_some(wrong, |d, e| {
                         d.child(div().text_size(px(11.5)).text_color(p.bad).child(e))
                     })
@@ -189,7 +186,7 @@ fn go(asked: &Rc<Asked>, clash: &str, window: &mut Window, cx: &mut App) {
     }
     let name = asked.name.read(cx).value().trim().to_string();
     if name.is_empty() || name.contains('/') {
-        *asked.error.borrow_mut() = Some("A name, without a slash.".into());
+        *asked.error.borrow_mut() = Some("Enter a name without slashes.".into());
         window.refresh();
         return;
     }
@@ -281,7 +278,7 @@ fn ask_clash(asked: &Rc<Asked>, name: &str, to: &str, window: &mut Window, cx: &
             v_flex()
                 .gap(px(12.))
                 .child(div().text_color(p.muted).child(format!(
-                    "{doing} would put another there. What is replaced goes to the trash."
+                    "{doing} would overwrite the existing item. Replaced items are moved to the trash."
                 )))
                 .child(
                     h_flex()

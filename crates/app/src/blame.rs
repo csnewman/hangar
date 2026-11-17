@@ -51,7 +51,7 @@ impl Blame {
     pub fn about(&self, line: usize) -> Option<String> {
         let (hash, c) = self.commit_of(line)?;
         if hash == UNCOMMITTED {
-            return Some("Changed here, not yet committed.".into());
+            return Some("Uncommitted change.".into());
         }
         let short: String = hash.chars().take(8).collect();
         Some(format!("{short} {}\n{}", c.author, c.summary))

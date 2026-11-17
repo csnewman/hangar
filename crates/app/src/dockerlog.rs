@@ -147,7 +147,7 @@ impl ContainerLog {
                         }
                     }
                     (Err(e), _) => v.end(e, cx),
-                    (Ok(_), None) => v.end("Docker gave no log".into(), cx),
+                    (Ok(_), None) => v.end("Docker returned no log".into(), cx),
                 }
                 cx.notify();
             });
@@ -206,7 +206,10 @@ impl ContainerLog {
         let Some(n) = params["stream"].as_u64() else {
             return;
         };
-        let why = params["why"].as_str().unwrap_or("it ended").to_string();
+        let why = params["why"]
+            .as_str()
+            .unwrap_or("the log ended")
+            .to_string();
         match &self.follow {
             Some(f) if f.stream == Some(n) => self.end(why, cx),
             Some(f) if f.stream.is_none() && f.ended.is_none() => {
@@ -258,8 +261,8 @@ impl Render for ContainerLog {
                     .text_size(px(11.))
                     .text_color(p.muted)
                     .child(match &ended {
-                        Some(why) => format!("{}: not following, {why}", self.name),
-                        None => format!("{}: following its output", self.name),
+                        Some(why) => format!("{} · not following: {why}", self.name),
+                        None => format!("{} · following", self.name),
                     })
                     .when(ended.is_some(), |d| {
                         d.child(

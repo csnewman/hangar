@@ -98,7 +98,7 @@ impl ThisHangarView {
 
     fn upgrade(&mut self, cx: &mut Context<Self>) {
         let Some((_, pve, made)) = self.made(cx) else {
-            self.error = Some("The app has no Proxmox token for this place.".into());
+            self.error = Some("No Proxmox token is stored for this place.".into());
             cx.notify();
             return;
         };
@@ -131,7 +131,7 @@ impl ThisHangarView {
 
     fn remove(&mut self, cx: &mut Context<Self>) {
         let Some((_, pve, made)) = self.made(cx) else {
-            self.error = Some("The app has no Proxmox token for this place.".into());
+            self.error = Some("No Proxmox token is stored for this place.".into());
             cx.notify();
             return;
         };
@@ -198,27 +198,13 @@ fn vm_line(at: &ProxmoxPlace) -> String {
     let mut s = format!("{} {}-hangar", at.vmid, at.prefix);
     if at.cores > 0 {
         s += &format!(
-            " · {} vCPUs · {} GB · {} GB",
+            " · {} vCPUs · {} GB RAM · {} GB disk",
             at.cores,
             at.memory_mib / 1024,
             at.data_gib
         );
     }
     s
-}
-
-/// Where its environments go.
-fn environments_line(at: &ProxmoxPlace) -> String {
-    let mut parts = Vec::new();
-    if !at.disks.is_empty() {
-        parts.push(format!("disks on {}", at.disks));
-    }
-    parts.push(format!("ISOs on {}", at.isos));
-    if !at.network.is_empty() {
-        parts.push(at.network.clone());
-    }
-    parts.push(format!("pool {}", at.pool));
-    parts.join(" · ")
 }
 
 impl Render for ThisHangarView {
@@ -252,14 +238,18 @@ impl Render for ThisHangarView {
             _ => false,
         };
         let (release_note, release_aside) = match (&self.doing, &self.runs, &self.latest) {
-            (Doing::Upgrading, ..) => ("Moving it to the latest release…".to_string(), None),
-            (Doing::Upgraded(v), ..) => (format!("Its VM restarts into {}.", short(v)), None),
-            (_, Some(r), Some(l)) if newer => (
-                format!("{} is out", short(l)),
-                Some(format!(" · it runs {}", short(r))),
+            (Doing::Upgrading, ..) => ("Upgrading…".to_string(), None),
+            (Doing::Upgraded(v), ..) => (
+                format!("Upgraded to {}", short(v)),
+                Some(" · the VM is restarting".to_string()),
             ),
-            (_, Some(r), _) => (format!("It runs {}, the latest", short(r)), None),
-            _ => ("Asking it what it runs…".into(), None),
+            (_, Some(r), Some(l)) if newer => (
+                format!("Update available: {}", short(l)),
+                Some(format!(" · installed {}", short(r))),
+            ),
+            (_, Some(r), Some(_)) => (short(r), Some(" · up to date".to_string())),
+            (_, Some(r), None) => (short(r), None),
+            _ => ("Checking for updates…".into(), None),
         };
         let fingerprint = hangar::show_fingerprint(&config.pin);
         let fingerprint = format!(
@@ -269,17 +259,21 @@ impl Render for ThisHangarView {
         );
         v_flex()
             .gap(px(6.))
-            .child(section("Where it runs", &p))
-            .child(row("Proxmox", format!("{}, node {}", crate::store::place_id(&at.url), at.node), &p))
-            .child(row("Its VM", vm_line(&at), &p))
+            .child(section("Deployment", &p))
             .child(row(
-                "Address",
-                format!("{} · certificate pinned, SHA-256 {fingerprint}", config.url),
+                "Proxmox",
+                format!("{} · node {}", crate::store::place_id(&at.url), at.node),
                 &p,
             ))
+            .child(row("VM", vm_line(&at), &p))
+            .child(row("Address", config.url.clone(), &p))
+            .child(row("Certificate", format!("Pinned · SHA-256 {fingerprint}"), &p))
             .child(row("Prefix", at.prefix.clone(), &p))
-            .child(row("Environments", environments_line(&at), &p))
-            .child(section("Release", &p))
+            .when(!at.disks.is_empty(), |d| d.child(row("Disk storage", at.disks.clone(), &p)))
+            .child(row("ISO storage", at.isos.clone(), &p))
+            .when(!at.network.is_empty(), |d| d.child(row("Network", at.network.clone(), &p)))
+            .child(row("Pool", at.pool.clone(), &p))
+            .child(section("Version", &p))
             .child(
                 h_flex()
                     .gap(px(10.))
@@ -300,7 +294,7 @@ impl Render for ThisHangarView {
                                     }),
                             )
                             .child(div().text_size(px(11.)).text_color(p.muted).child(
-                                "Its VM restarts into the new release, a few seconds; its environments keep running and are picked up again. Should the new release's Hangar not run, it goes back to the one before by itself.",
+                                "The VM restarts during an upgrade; environments keep running. If the new version fails to start, the previous version is restored.",
                             )),
                     )
                     .child(match self.doing {
@@ -309,7 +303,7 @@ impl Render for ThisHangarView {
                         }
                         _ if newer => primary("hangar-upgrade", "Upgrade", &p)
                             .on_click(cx.listener(|this, _, _, cx| this.upgrade(cx))),
-                        _ => button("hangar-upgrade", "Reinstall Latest", &p)
+                        _ => button("hangar-upgrade", "Reinstall", &p)
                             .on_click(cx.listener(|this, _, _, cx| this.upgrade(cx))),
                     }),
             )
@@ -322,8 +316,8 @@ impl Render for ThisHangarView {
                     .border_1()
                     .border_color(p.bad)
                     .child(div().flex_1().min_w_0().child(format!(
-                        "Remove {name}? Its VM, its environments' VMs and their disks, and its ISOs, all named {}-, are deleted from Proxmox. This cannot be undone.",
-                        at.prefix
+                        "Remove {name}? VM {}, all environment VMs and their disks, and all ISOs prefixed {}- will be deleted from Proxmox. This cannot be undone.",
+                        at.vmid, at.prefix
                     )))
                     .child(
                         button("hangar-remove-no", "Cancel", &p).on_click(cx.listener(
@@ -347,7 +341,7 @@ impl Render for ThisHangarView {
                     .into_any_element(),
                 Doing::Removing => h_flex()
                     .text_color(p.muted)
-                    .child(format!("Removing {name} from Proxmox…"))
+                    .child(format!("Removing {name}…"))
                     .into_any_element(),
                 _ => h_flex()
                     .id("hangar-remove")
@@ -373,7 +367,7 @@ impl Render for ThisHangarView {
                             .flex()
                             .justify_end()
                             .child(div().min_w_0().truncate().text_size(px(10.5)).text_color(p.muted).child(format!(
-                                "stops and deletes its VM and all it made on Proxmox, named {}-…, environments' disks too; asks first",
+                                "Deletes the VM, its environments and all ISOs prefixed {}-",
                                 at.prefix
                             ))),
                     )

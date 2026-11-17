@@ -37,7 +37,7 @@ impl View {
         match self {
             View::Text => "Text Editor",
             View::Image => "Image Viewer",
-            View::External => "This Computer's App",
+            View::External => "Default App",
             View::Hex => "Hex Viewer",
             View::Browser => "Browser",
         }
@@ -223,7 +223,7 @@ async fn read_all(code: &Code, path: &str, most: u64) -> Result<Vec<u8>, String>
     loop {
         let (part, size) = read_part(code, path, out.len(), PART).await?;
         if size > most {
-            return Err(format!("It is too big to show ({} MB).", size >> 20));
+            return Err(format!("too large to display ({} MB)", size >> 20));
         }
         let done = part.len() < PART || part.is_empty();
         out.extend(part);
@@ -375,7 +375,7 @@ impl FileViewer {
             .when(more, |d| {
                 d.child(
                     h_flex().p(px(8.)).child(
-                        crate::ui::button("hex-more", "Read More", p)
+                        crate::ui::button("hex-more", "Load More", p)
                             .on_click(cx.listener(|v, _, _, cx| v.more(cx))),
                     ),
                 )
@@ -398,8 +398,10 @@ impl Render for FileViewer {
             .map(|s| crate::docker::bytes(s as f64))
             .unwrap_or_default();
         let body = match &self.shown {
-            Shown::Reading => note("Reading…", &p).into_any_element(),
-            Shown::Failed(e) => note(&format!("Could not read it: {e}"), &p).into_any_element(),
+            Shown::Reading => note("Loading…", &p).into_any_element(),
+            Shown::Failed(e) => {
+                note(&format!("Could not read the file: {e}"), &p).into_any_element()
+            }
             Shown::Image(image) => div()
                 .size_full()
                 .p(px(16.))
@@ -435,7 +437,7 @@ impl Render for FileViewer {
                         if self.opening {
                             SharedString::from("Opening…")
                         } else {
-                            SharedString::from("Open in This Computer's App")
+                            SharedString::from("Open in Default App")
                         },
                         &p,
                     )

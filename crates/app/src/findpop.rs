@@ -112,7 +112,7 @@ impl FindPopup {
         };
         let folder = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("A folder: src, or /home/dev/project/src")
+                .placeholder("Folder, e.g. src or /home/dev/project/src")
                 .default_value(folder)
         });
         let replacement = cx.new(|cx| InputState::new(window, cx).placeholder("Replace with"));
@@ -536,7 +536,7 @@ impl FindPopup {
             .truncate()
             .child(pv.path.clone());
         let body = match &pv.text {
-            None => note("Reading…", p),
+            None => note("Loading…", p),
             Some(Err(e)) => note(e.clone(), p),
             Some(Ok(None)) => note("The file cannot be shown.", p),
             Some(Ok(Some(text))) => lines_around(text, m, PREVIEW_LINES, p),
@@ -705,7 +705,7 @@ impl Render for FindPopup {
                     "find-masked",
                     "File mask",
                     self.masked,
-                    "Only the files matching the mask",
+                    "Search only files matching the mask",
                 )
                 .on_click(cx.listener(|v, _, _, cx| {
                     v.masked = !v.masked;
@@ -763,7 +763,7 @@ impl Render for FindPopup {
                 ui::disabled("find-replace-all", "Replace All", &p)
             } else if self.confirming {
                 let label = if self.truncated {
-                    "Replace every match?".to_string()
+                    "Replace all matches?".to_string()
                 } else {
                     format!(
                         "Replace {occurrences} match{} in {files} file{}?",

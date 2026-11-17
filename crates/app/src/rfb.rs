@@ -294,7 +294,7 @@ fn session(
     }
     let types = w.take(n)?;
     if !types.contains(&1) {
-        return Err("the desktop asks for a password, which Hangar's do not".into());
+        return Err("the desktop requires a password, which is not supported".into());
     }
     w.write(&[1])?;
     if w.u32()? != 0 {
@@ -363,9 +363,7 @@ fn session(
                 }
             }
             t => {
-                return Err(format!(
-                    "the desktop sent a message of a kind not known ({t})"
-                ));
+                return Err(format!("unknown message type from the desktop ({t})"));
             }
         }
     }
@@ -412,9 +410,7 @@ fn rect(
         }
         -223 => fb.lock().unwrap().resize(rw, rh),
         e => {
-            return Err(format!(
-                "the desktop sent pixels in an encoding not asked for ({e})"
-            ));
+            return Err(format!("unexpected pixel encoding from the desktop ({e})"));
         }
     }
     Ok(())
@@ -443,7 +439,7 @@ fn inflate(z: &mut flate2::Decompress, data: &[u8], out: &mut Vec<u8>) -> Result
             return Ok(());
         }
         if used == 0 && made == 0 {
-            return Err("the desktop's compressed pixels ended early".into());
+            return Err("compressed pixel data ended early".into());
         }
     }
 }
@@ -489,7 +485,7 @@ pub fn zrle_tiles(data: &[u8], width: usize, height: usize) -> Result<Vec<u8>, S
                             let i = (byte >> left) & ((1 << bits) - 1);
                             tile[row * tw + col] = *palette
                                 .get(i as usize)
-                                .ok_or("a palette index past its end")?;
+                                .ok_or("palette index out of range")?;
                         }
                     }
                 }
@@ -513,7 +509,7 @@ pub fn zrle_tiles(data: &[u8], width: usize, height: usize) -> Result<Vec<u8>, S
                         let i = r.u8()?;
                         let c = *palette
                             .get((i & 0x7f) as usize)
-                            .ok_or("a palette index past its end")?;
+                            .ok_or("palette index out of range")?;
                         let n = if i & 0x80 != 0 { r.run()? } else { 1 };
                         for p in tile.iter_mut().skip(at).take(n) {
                             *p = c;
@@ -521,7 +517,7 @@ pub fn zrle_tiles(data: &[u8], width: usize, height: usize) -> Result<Vec<u8>, S
                         at += n;
                     }
                 }
-                s => return Err(format!("a ZRLE tile of a kind not known ({s})")),
+                s => return Err(format!("unknown ZRLE tile type ({s})")),
             }
             for row in 0..th {
                 for col in 0..tw {

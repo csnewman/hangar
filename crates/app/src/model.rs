@@ -230,11 +230,11 @@ fn start_step(step: &str) -> &str {
     match step {
         "download" => "Downloading the image",
         "unpack" => "Unpacking the image",
-        "snapshot" => "Keeping a copy to roll back to",
-        "disks" => "Making its disks",
+        "snapshot" => "Copying disk for rollback",
+        "disks" => "Preparing disks",
         "boot" => "Booting",
         "network" => "Waiting for the network",
-        "profile" => "Bringing your settings",
+        "profile" => "Syncing profile",
         "workspace" => "Setting up the workspace",
         _ => "Starting",
     }
@@ -286,7 +286,7 @@ pub fn card(place: &PlaceConfig, e: &Environment, now: DateTime<Utc>) -> Card {
             let reason = e
                 .reason
                 .clone()
-                .unwrap_or_else(|| "It could not start.".into());
+                .unwrap_or_else(|| "No error reported".into());
             lines.push(line(reason.clone(), LineKind::Plain));
             Look {
                 rank: Rank::Failed,
@@ -388,7 +388,7 @@ pub fn card(place: &PlaceConfig, e: &Environment, now: DateTime<Utc>) -> Card {
                 format!("Suspended {}", ago(e.updated_at, now)),
                 LineKind::Plain,
             ));
-            lines.push(line("Its memory is kept on disk", LineKind::Muted));
+            lines.push(line("Memory saved to disk", LineKind::Muted));
             Look {
                 rank: Rank::Suspended,
                 tone: Tone::Ring,
@@ -433,7 +433,7 @@ pub fn card(place: &PlaceConfig, e: &Environment, now: DateTime<Utc>) -> Card {
         lines.push(line(format!("{others} more session{s}"), LineKind::Muted));
     }
     if e.worker_online == Some(false) && e.phase == "running" {
-        lines.push(line("Its worker has not reported lately", LineKind::Muted));
+        lines.push(line("Worker not responding", LineKind::Muted));
     }
     Card {
         place: place.id.clone(),
@@ -515,7 +515,7 @@ pub fn connection(c: &Connection) -> (Tone, Option<&'static str>, bool) {
         Connection::Connecting => (Tone::Busy, Some("Connecting…"), false),
         Connection::Offline { .. } => (Tone::Bad, Some("Offline"), true),
         Connection::SignIn => (Tone::Busy, Some("Sign in"), true),
-        Connection::Unsupported { .. } => (Tone::Bad, Some("Needs an update"), true),
+        Connection::Unsupported { .. } => (Tone::Bad, Some("Unsupported version"), true),
     }
 }
 

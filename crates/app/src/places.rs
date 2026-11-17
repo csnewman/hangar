@@ -207,10 +207,10 @@ impl Places {
         token: &str,
         cx: &mut Context<Self>,
     ) -> Result<String, String> {
-        let url = store::normalise_url(url).ok_or("That is not a server's address.")?;
+        let url = store::normalise_url(url).ok_or("Invalid address. Enter a host name or URL.")?;
         let token = token.trim();
         if token.is_empty() {
-            return Err("An access token is needed: make one on the server's Account page.".into());
+            return Err("Enter an access token. Create one on the server's Account page.".into());
         }
         let id = store::place_id(&url);
         self.tokens.set(&id, token)?;

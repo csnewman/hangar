@@ -272,13 +272,13 @@ pub fn check(
         return Check::Fine;
     };
     if matches!(*last, "." | "..") {
-        return Check::Wrong(format!("“{last}” is not a name"));
+        return Check::Wrong(format!("“{last}” is not a valid name"));
     }
     let mut at = place(folder, "");
     for step in way {
         match *step {
             "." => continue,
-            ".." if at == "/" => return Check::Wrong("There is nothing above /".into()),
+            ".." if at == "/" => return Check::Wrong("Cannot go above /".into()),
             ".." => {
                 at = parent_of(&at);
                 continue;
@@ -445,7 +445,7 @@ pub fn trash(t: &Target, window: &mut Window, cx: &mut App) {
     let what = if t.dir { "folder" } else { "file" };
     confirm(
         &format!("Move {} to the trash?", t.name()),
-        &format!("The {what} goes to the environment's trash, from where it can be restored."),
+        &format!("The {what} can be restored from the environment's trash."),
         "Move to Trash",
         window,
         cx,
@@ -481,7 +481,7 @@ pub fn trash_all(all: &[Target], window: &mut Window, cx: &mut App) {
             let paths: Vec<String> = many.iter().map(|t| t.abs.clone()).collect();
             confirm(
                 &format!("Move {} items to the trash?", many.len()),
-                "They go to the environment's trash, from where they can be restored.",
+                "The items can be restored from the environment's trash.",
                 "Move to Trash",
                 window,
                 cx,
@@ -530,7 +530,7 @@ pub fn rollback(t: &Target, window: &mut Window, cx: &mut App) {
     let (code, path, name) = (t.code.clone(), t.abs.clone(), t.name().to_string());
     confirm(
         &format!("Roll back {name}?"),
-        "Its changes since the last commit are discarded; a file git does not know is deleted.",
+        "Uncommitted changes will be discarded. An unversioned file will be deleted.",
         "Roll Back",
         window,
         cx,

@@ -1316,7 +1316,7 @@ impl Shell {
                     .px(px(10.))
                     .py(px(10.))
                     .text_color(p.muted)
-                    .child("Nothing needs you. Agents asking or finishing, and environments failing, show here."),
+                    .child("No notifications. Agent questions, finished agents and failed environments appear here."),
             );
         }
         for (i, n) in shown.iter().enumerate() {
@@ -1400,7 +1400,7 @@ impl Shell {
                     .text_color(p.muted)
                     .child("Notifications")
                     .child(div().flex_1())
-                    .child(div().font_weight(FontWeight::NORMAL).child("every place")),
+                    .child(div().font_weight(FontWeight::NORMAL).child("All places")),
             )
             .child(crate::project::scroll("notices", list).max_h(px(420.)))
     }
@@ -1429,7 +1429,7 @@ impl Shell {
                     .py(px(4.))
                     .text_size(px(11.5))
                     .text_color(p.muted)
-                    .child("Nothing matches"),
+                    .child("No matches"),
             );
         }
         for g in groups {
@@ -1526,7 +1526,7 @@ impl Shell {
                                 p,
                                 cx,
                             ))
-                            .child("to see its environments"),
+                            .child("to view environments"),
                     );
                 } else if g.rows.is_empty() {
                     group = group.child(
@@ -1536,7 +1536,7 @@ impl Shell {
                             .text_size(px(11.))
                             .text_color(p.muted)
                             .child(if whose == model::Whose::Mine {
-                                "None of yours"
+                                "No environments owned by you"
                             } else {
                                 "No environments"
                             }),
@@ -1826,7 +1826,7 @@ impl Shell {
                         .gap(px(10.))
                         .text_color(p.muted)
                         .child(format!(
-                            "{name} is signed out: its environments show once you sign in."
+                            "{name} is signed out. Sign in to view its environments."
                         ))
                         .child(
                             crate::ui::primary(
@@ -1845,7 +1845,7 @@ impl Shell {
             body = body.child(
                 div()
                     .text_color(p.muted)
-                    .child("No environments yet. Make one with + New environment."),
+                    .child("No environments. Create one with + New environment."),
             );
         }
         v_flex()
@@ -2035,7 +2035,7 @@ fn env_menu(
             let delete = delete.clone();
             crate::treeops::confirm(
                 &format!("Delete {name}?"),
-                "Its disks and everything on them go with it. This cannot be undone.",
+                "Its disks and all data on them will be deleted. This cannot be undone.",
                 "Delete",
                 window,
                 cx,

@@ -59,7 +59,7 @@ impl Page {
             Page::Places => "Places",
             Page::Hangar(_) => "This Hangar",
             Page::Account(_) => "Account",
-            Page::Browser(_) => "In the Browser",
+            Page::Browser(_) => "Web Pages",
         }
     }
 
@@ -236,7 +236,7 @@ impl SettingsView {
     ) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings"));
         let keys =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Find an action or its keys"));
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search actions or shortcuts"));
         let subs = vec![
             cx.subscribe(&search, |_, _, e: &InputEvent, cx| {
                 if matches!(e, InputEvent::Change) {
@@ -670,20 +670,12 @@ impl SettingsView {
                         .border_1()
                         .border_color(p.border_strong)
                         .overflow_hidden()
-                        .child(seg(
-                            "theme-system",
-                            "As the System",
-                            ThemeChoice::System,
-                            cx,
-                        ))
+                        .child(seg("theme-system", "System", ThemeChoice::System, cx))
                         .child(seg("theme-light", "Light", ThemeChoice::Light, cx))
                         .child(seg("theme-dark", "Dark", ThemeChoice::Dark, cx)),
                 ),
             )
-            .child(note(
-                "As the System follows macOS's appearance, changing with it.",
-                p,
-            ))
+            .child(note("System follows the macOS appearance setting.", p))
     }
 
     fn editor(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
@@ -703,7 +695,7 @@ impl SettingsView {
             .child(self.check("soft-wrap", "Soft-wrap long lines", d.soft_wrap, |v, b| v.soft_wrap = b, cx))
             .child(self.check(
                 "hide-pointer",
-                "Hide the pointer while typing, until the mouse moves",
+                "Hide the pointer while typing",
                 d.hide_pointer,
                 |v, b| v.hide_pointer = b,
                 cx,
@@ -718,20 +710,20 @@ impl SettingsView {
             ))
             .child(self.check(
                 "show-hidden",
-                "Show hidden files (names starting with a dot)",
+                "Show hidden files",
                 d.show_hidden,
                 |v, b| v.show_hidden = b,
                 cx,
             ))
             .child(self.check(
                 "show-ignored",
-                "Show files git ignores",
+                "Show files ignored by Git",
                 d.show_ignored,
                 |v, b| v.show_ignored = b,
                 cx,
             ))
             .child(note(
-                "Spelling, language servers and where tool windows dock are kept with each environment, in its Code settings, as the web's are.",
+                "Spelling, language servers and tool window placement are set per environment, in its Code settings.",
                 p,
             ))
     }
@@ -745,24 +737,24 @@ impl SettingsView {
         let d = self.draft.clone();
         let t = &d.terminal;
         let family = if t.font_family.is_empty() {
-            format!("{} (the default)", crate::termview::mono_family())
+            format!("{} (default)", crate::termview::mono_family())
         } else {
             t.font_family.clone()
         };
         let mut families = vec![(
-            format!("{} (the default)", crate::termview::mono_family()),
+            format!("{} (default)", crate::termview::mono_family()),
             String::new(),
         )];
         families.extend(fonts.into_iter().map(|f| (f.clone(), f)));
         let themes = |chosen: &str| {
-            let mut list = vec![("The app's colours".to_string(), String::new())];
+            let mut list = vec![("App default".to_string(), String::new())];
             list.extend(
                 crate::termthemes::THEMES
                     .iter()
                     .map(|th| (th.name.to_string(), th.name.to_string())),
             );
             let label = if chosen.is_empty() {
-                "The app's colours".to_string()
+                "App default".to_string()
             } else {
                 chosen.to_string()
             };
@@ -790,7 +782,7 @@ impl SettingsView {
                 cx,
             )))
             .child(note(
-                "Ghostty is libghostty-vt, Ghostty's terminal emulation; a session a Ghostty terminal starts is told it runs in Ghostty, so programs such as Claude Code use what Ghostty can do. Terminals opened after the choice use it.",
+                "Ghostty (libghostty-vt) identifies itself to programs, so tools such as Claude Code can use Ghostty features. Applies to new terminals.",
                 p,
             ))
             .child(section("Font", p))
@@ -824,7 +816,7 @@ impl SettingsView {
                 cx,
             )))
             .child(note(
-                "A terminal that changes size tells its session, so programs in it redraw to fit.",
+                "Applies to open terminals; running programs redraw to fit.",
                 p,
             ))
             .child(section("Colours", p))
@@ -845,7 +837,7 @@ impl SettingsView {
                 cx,
             )))
             .child(note(
-                "Each with the app's appearance, light or dark: the terminal's background, text and sixteen named colours, as Ghostty's themes of those names have them.",
+                "Used with the app's light or dark appearance. A theme sets the background, foreground and 16 ANSI colours, as in Ghostty's theme of the same name.",
                 p,
             ))
             .child(field("Contrast", p).child(self.amount(
@@ -868,7 +860,7 @@ impl SettingsView {
                 cx,
             )))
             .child(note(
-                "Text with less contrast against its background than this is drawn white or black, whichever stands out more.",
+                "Text below this contrast ratio against its background is drawn in white or black, whichever contrasts more.",
                 p,
             ))
             .child(field("Faint text", p).child(self.amount(
@@ -886,7 +878,7 @@ impl SettingsView {
             )))
             .child(self.check(
                 "terminal-bold-bright",
-                "Draw bold text in the bright colours",
+                "Draw bold text in bright colours",
                 t.bold_is_bright,
                 |v, b| v.terminal.bold_is_bright = b,
                 cx,
@@ -912,7 +904,7 @@ impl SettingsView {
                 cx,
             ))
             .child(note(
-                "Until a program asks for another, as editors and shells may.",
+                "Programs such as editors and shells can change the cursor.",
                 p,
             ))
             .child(section("Keyboard and mouse", p))
@@ -925,13 +917,13 @@ impl SettingsView {
                     cx,
                 ))
                 .child(note(
-                    "Option-B and Option-F then move by words in the shell, as Alt does elsewhere, rather than typing ∫ and ƒ.",
+                    "Option-B and Option-F move by word in the shell instead of typing ∫ and ƒ.",
                     p,
                 ))
             })
             .child(self.check(
                 "terminal-copy-select",
-                "Copy text as it is selected",
+                "Copy on select",
                 t.copy_on_select,
                 |v, b| v.terminal.copy_on_select = b,
                 cx,
@@ -951,7 +943,7 @@ impl SettingsView {
                 cx,
             )))
             .child(note(
-                "Shift-right-click opens the menu whatever is chosen. A program that asks for the mouse is told of the click instead.",
+                "Shift-right-click always opens the menu. Programs that capture the mouse receive the click instead.",
                 p,
             ))
             .child(field("Scroll speed", p).child(self.amount(
@@ -977,14 +969,14 @@ impl SettingsView {
             ))
             .child(self.check(
                 "terminal-bell-bounce",
-                "Bounce the Dock icon while the app is behind others",
+                "Bounce the Dock icon when the app is in the background",
                 t.bell_bounce,
                 |v, b| v.terminal.bell_bounce = b,
                 cx,
             ))
             .child(self.check(
                 "terminal-bell-sound",
-                "Play the system's alert sound",
+                "Play the system alert sound",
                 t.bell_sound,
                 |v, b| v.terminal.bell_sound = b,
                 cx,
@@ -992,7 +984,7 @@ impl SettingsView {
             .child(section("Programs", p))
             .child(self.check(
                 "terminal-progress",
-                "Show the progress programs report, along the terminal's top",
+                "Show program progress at the top of the terminal",
                 t.progress,
                 |v, b| v.terminal.progress = b,
                 cx,
@@ -1014,7 +1006,7 @@ impl SettingsView {
                 cx,
             )))
             .child(note(
-                "Whether a program may copy to the clipboard, and read what is on it (OSC 52), or asks you first. A read hands the program whatever was last copied, anywhere.",
+                "Clipboard access for programs (OSC 52). Allowing reads exposes whatever was last copied in any app.",
                 p,
             ))
             .child(field("Scrollback", p).child(self.amount(
@@ -1031,7 +1023,7 @@ impl SettingsView {
                 cx,
             )))
             .child(note(
-                "Kept for each terminal, by Ghostty's emulation; alacritty's keeps 10,000 lines.",
+                "Per terminal, with the Ghostty emulator. Alacritty keeps 10,000 lines.",
                 p,
             ))
     }
@@ -1052,7 +1044,7 @@ impl SettingsView {
             .gap(px(10.))
             .child(self.check(
                 "double-shift",
-                "Shift pressed twice opens Search Everywhere",
+                "Open Search Everywhere by pressing Shift twice",
                 self.draft.double_shift,
                 |v, b| v.double_shift = b,
                 cx,
@@ -1099,7 +1091,7 @@ impl SettingsView {
                     })),
             )
             .child(note(
-                &format!("{count} actions. Keys are IntelliJ's wherever IntelliJ has the action."),
+                &format!("{count} actions. Shortcuts follow IntelliJ's keymap where an equivalent action exists."),
                 p,
             ))
     }
@@ -1123,7 +1115,7 @@ impl SettingsView {
                     .px(px(8.))
                     .py(px(4.))
                     .bg(p.surface_2)
-                    .child(div().flex_1().text_color(p.muted).child("When"))
+                    .child(div().flex_1().text_color(p.muted).child("Event"))
                     .child(col("In the app"))
                     .child(col("System"))
                     .child(col("Dock badge"))
@@ -1188,22 +1180,22 @@ impl SettingsView {
         v_flex()
             .gap(px(10.))
             .child(table)
-            .child(section("From", p))
+            .child(section("Places", p))
             .child(from)
             .child(note(
-                "A place not ticked shows in the bell's list only: no system notification, badge or sound.",
+                "Notifications from unchecked places appear only in the notification list, with no system notification, badge or sound.",
                 p,
             ))
             .child(section("Quiet", p))
             .child(self.check(
                 "while-looking",
-                "No system notification for the environment in front of you",
+                "Suppress system notifications for the environment in view",
                 n.while_looking,
                 |v, b| v.notify.while_looking = b,
                 cx,
             ))
             .child(note(
-                "The system's own notifications follow Focus and Do Not Disturb, as macOS has them.",
+                "System notifications follow the macOS Focus and Do Not Disturb settings.",
                 p,
             ))
     }
@@ -1295,7 +1287,7 @@ impl SettingsView {
                             .child(if row.removed {
                                 h_flex()
                                     .gap(px(8.))
-                                    .child(div().text_color(p.muted).child("Removed when applied"))
+                                    .child(div().text_color(p.muted).child("Removed on Apply"))
                                     .child(
                                         button(
                                             SharedString::from(format!("place-keep-{id}")),
@@ -1335,7 +1327,7 @@ impl SettingsView {
                 ),
             )
             .child(note(
-                "The list is in this order, in the sidebar and on Home. Removing a place forgets it here, its token with it; its environments carry on there.",
+                "Places appear in this order in the sidebar and on Home. Removing a place deletes its token from this app; its environments keep running.",
                 p,
             ))
     }
@@ -1353,25 +1345,21 @@ impl SettingsView {
                 "/account",
                 "Your password, sign-in keys, SSH keys and access tokens",
             ),
-            ("Templates", "/templates", "What environments are made from"),
-            (
-                "Files and packs",
-                "/files",
-                "Your packs, and the copies of each",
-            ),
-            ("Teams", "/teams", "The teams you are in"),
+            ("Templates", "/templates", "Templates for new environments"),
+            ("Files and packs", "/files", "Your packs and their copies"),
+            ("Teams", "/teams", "Your teams"),
             ("Images", "/images", "Images in this place's registry"),
             ("Settings", "/settings", "Your preferences on this server"),
         ];
         if admin {
             pages.extend([
-                ("Users", "/admin/users", "Everyone who can sign in"),
+                ("Users", "/admin/users", "All user accounts"),
                 (
                     "Workers",
                     "/admin/workers",
-                    "The machines environments run on",
+                    "Machines that run environments",
                 ),
-                ("Audit log", "/admin/audit", "What was done, by whom"),
+                ("Audit log", "/admin/audit", "Record of user actions"),
             ]);
         }
         let mut list = v_flex().gap(px(2.));
@@ -1399,7 +1387,7 @@ impl SettingsView {
         v_flex()
             .gap(px(10.))
             .child(note(
-                "Administering a place stays in its own web pages, which always match its server's version.",
+                "Administration is done in the place's web pages, which always match its server version.",
                 p,
             ))
             .child(list)
@@ -1641,7 +1629,7 @@ pub fn connection_label(c: &Connection, p: &Palette) -> (String, gpui::Hsla) {
         Connection::Connecting => ("Connecting…".into(), p.muted),
         Connection::Online => ("Online".into(), p.good),
         Connection::Offline { .. } => ("Offline".into(), p.bad),
-        Connection::SignIn => ("Needs signing in".into(), p.wait),
+        Connection::SignIn => ("Sign-in required".into(), p.wait),
         Connection::Unsupported { server } => (format!("Server {server} is not supported"), p.bad),
     }
 }
@@ -1703,7 +1691,7 @@ fn bindings(cx: &App) -> Vec<Binding> {
         .map(|(name, contexts, keys)| Binding {
             name,
             context: if contexts.len() > 2 {
-                format!("{} places", contexts.len())
+                format!("{} contexts", contexts.len())
             } else {
                 contexts.join(", ")
             },

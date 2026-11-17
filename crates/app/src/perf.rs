@@ -121,13 +121,13 @@ pub fn describe(e: &ActivityEvent) -> (String, Option<String>) {
                 (Some(c), Some(m)) => Some(format!("{c} vCPUs · {}", memory(m))),
                 _ => None,
             };
-            return ("created it".into(), detail);
+            return ("created the environment".into(), detail);
         }
-        "environment.start" if d["from"] == "suspended" => "resumed it",
-        "environment.start" => "started it",
-        "environment.stop" => "stopped it",
-        "environment.suspend" => "suspended it",
-        "environment.delete" | "environment.deleted" => "deleted it",
+        "environment.start" if d["from"] == "suspended" => "resumed the environment",
+        "environment.start" => "started the environment",
+        "environment.stop" => "stopped the environment",
+        "environment.suspend" => "suspended the environment",
+        "environment.delete" | "environment.deleted" => "deleted the environment",
         "environment.update_settings" => {
             let mut changed = vec![];
             for (key, label) in [
@@ -147,26 +147,28 @@ pub fn describe(e: &ActivityEvent) -> (String, Option<String>) {
                 }
             }
             let what = if d["running"] == true {
-                "resized its memory as it ran"
+                "resized the running environment's memory"
             } else {
-                "changed its settings"
+                "changed settings"
             };
             return (
                 what.into(),
                 (!changed.is_empty()).then(|| changed.join(" · ")),
             );
         }
-        "environment.reset_to_template" => "reset it to its template",
-        "environment.ports_public" if d["public"] == true => "made its web servers public",
-        "environment.ports_public" => "made its web servers private",
-        "environment.image_upgrade" => "chose to upgrade its image at its next start",
-        "environment.image_rollback" => "chose to roll its image back at its next start",
-        "environment.image_keep" => "kept its upgraded image",
-        "environment.image_change_cancel" => "cancelled the change to its image",
-        "environment.choose_copy" => "chose which copy of a pack it uses",
-        "environment.resolve_conflict" => "settled a file that became shared",
-        "environment.unplaceable" => return ("could not place it yet".into(), text("reason")),
-        "environment.phase" => return ("reported it failed".into(), text("reason")),
+        "environment.reset_to_template" => "reset the environment to its template",
+        "environment.ports_public" if d["public"] == true => "made web servers public",
+        "environment.ports_public" => "made web servers private",
+        "environment.image_upgrade" => "scheduled an image upgrade for the next start",
+        "environment.image_rollback" => "scheduled an image rollback for the next start",
+        "environment.image_keep" => "kept the upgraded image",
+        "environment.image_change_cancel" => "cancelled the image change",
+        "environment.choose_copy" => "changed which copy of a pack is used",
+        "environment.resolve_conflict" => "resolved a shared file conflict",
+        "environment.unplaceable" => {
+            return ("could not place the environment yet".into(), text("reason"));
+        }
+        "environment.phase" => return ("reported a failure".into(), text("reason")),
         "environment.signal_process" => {
             let signal = text("signal").unwrap_or_else(|| "a signal".into());
             let pid = d["pid"].as_i64().map(|p| p.to_string()).unwrap_or_default();
@@ -175,7 +177,7 @@ pub fn describe(e: &ActivityEvent) -> (String, Option<String>) {
                 text("error"),
             );
         }
-        "environment.ssh_refused" => "was refused SSH",
+        "environment.ssh_refused" => "was denied SSH access",
         other => {
             let verb = other.split_once('.').map_or(other, |(_, v)| v);
             return (verb.replace('_', " "), None);
@@ -400,12 +402,12 @@ impl PerformanceView {
         let (title, about, verb) = match signal {
             "KILL" => (
                 format!("Kill {} ({pid})?", p.name),
-                "It is stopped at once, with no chance to save its work.",
+                "The process is ended immediately, without a chance to save its work.",
                 "Kill",
             ),
             _ => (
                 format!("Stop {} ({pid})?", p.name),
-                "It is asked to stop (TERM), as a program asked to quit.",
+                "The process is sent TERM and asked to exit.",
                 "Stop",
             ),
         };
@@ -422,7 +424,7 @@ impl PerformanceView {
                 .px(px(10.))
                 .py(px(8.))
                 .text_color(p.muted)
-                .child("Reading what it uses…")
+                .child("Collecting data…")
                 .into_any_element();
         };
         let series = |f: fn(&Stats) -> f64| -> Vec<f64> { self.history.iter().map(f).collect() };
@@ -462,12 +464,12 @@ impl PerformanceView {
             .when(now.swap_total_mib.unwrap_or_default() > 0, |d| {
                 d.child(tile(
                     "Swap",
-                    format!("{} out", memory(now.swap_used_mib.unwrap_or_default())),
+                    format!("{} used", memory(now.swap_used_mib.unwrap_or_default())),
                     series(|s| s.swap_used_mib.unwrap_or_default() as f64),
                     now.swap_total_mib.unwrap_or_default() as f64,
                     p.peer,
                     Some(format!(
-                        "What it has swapped out, of {}: {} compressed into {} of its memory, the rest on its disk, which takes {} of the worker's. In {}, out {}.",
+                        "Swap size: {}. {} is compressed into {} of memory; the rest is on disk, using {} on the worker. Swap in {}, out {}.",
                         memory(now.swap_total_mib.unwrap_or_default()),
                         memory(now.swap_compressed_mib.unwrap_or_default()),
                         memory(now.swap_pool_mib.unwrap_or_default()),
@@ -534,7 +536,7 @@ impl PerformanceView {
 
     fn processes(&self, p: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
         let list = match &self.list {
-            None => return note("Reading its processes…", p),
+            None => return note("Loading processes…", p),
             Some(Err(e)) => return note(e.clone(), p),
             Some(Ok(l)) => l,
         };
@@ -720,7 +722,7 @@ impl PerformanceView {
 
     fn activity_list(&self, p: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
         if let Some(e) = &self.activity_error {
-            return note(format!("Could not read its activity: {e}"), p);
+            return note(format!("Could not read activity: {e}"), p);
         }
         let shown: Vec<&ActivityEvent> = self.activity.iter().filter(|e| notable(e)).collect();
         let mut list = v_flex()
@@ -734,9 +736,9 @@ impl PerformanceView {
         if shown.is_empty() {
             list = list.child(div().text_color(p.muted).child(
                 if self.activity.is_empty() && self.more {
-                    "Reading…"
+                    "Loading…"
                 } else {
-                    "Nothing has been done to it yet."
+                    "No activity yet."
                 },
             ));
         }
@@ -912,7 +914,7 @@ impl Render for PerformanceView {
                         chip("perf-tree", "Tree".into(), tree, &p)
                             .tooltip(|window, cx| {
                                 gpui_component::tooltip::Tooltip::new(
-                                    "Each process under the one that started it",
+                                    "Show each process under its parent",
                                 )
                                 .build(window, cx)
                             })

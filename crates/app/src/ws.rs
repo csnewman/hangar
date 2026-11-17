@@ -72,12 +72,12 @@ pub fn connect(url: &str, auth: &str) -> Result<Socket, ConnectError> {
         .map_err(|e| refused(e.to_string()))?;
     req.headers_mut().insert(
         "Authorization",
-        auth.parse().map_err(|_| refused("a bad token".into()))?,
+        auth.parse().map_err(|_| refused("invalid token".into()))?,
     );
     let uri = req.uri().clone();
     let host = uri
         .host()
-        .ok_or_else(|| refused("no host".into()))?
+        .ok_or_else(|| refused("URL has no host".into()))?
         .to_string();
     let tls = uri.scheme_str() == Some("wss");
     let port = uri.port_u16().unwrap_or(if tls { 443 } else { 80 });
@@ -103,7 +103,7 @@ pub fn connect(url: &str, auth: &str) -> Result<Socket, ConnectError> {
                 }
                 let why = serde_json::from_str::<Body>(&body)
                     .map(|b| b.error)
-                    .unwrap_or_else(|_| format!("the server answered {}", r.status()));
+                    .unwrap_or_else(|_| format!("server returned {}", r.status()));
                 ConnectError::Refused(r.status().as_u16(), why)
             }
             e => ConnectError::Unreachable(e.to_string()),
@@ -113,7 +113,7 @@ pub fn connect(url: &str, auth: &str) -> Result<Socket, ConnectError> {
     let sock = match ws.get_ref() {
         MaybeTlsStream::Plain(s) => s,
         MaybeTlsStream::Rustls(s) => s.get_ref(),
-        _ => return Err(refused("an unknown stream".into())),
+        _ => return Err(refused("unsupported stream type".into())),
     };
     sock.set_read_timeout(Some(POLL)).map_err(unreachable)?;
     Ok(ws)
@@ -155,7 +155,7 @@ impl Liveness {
         let since = |t: SystemTime| now.duration_since(t).unwrap_or_default();
         match self.pinged {
             Some(p) if since(p) >= ANSWER_WITHIN => {
-                Err(format!("no answer for {}s", since(self.heard).as_secs()))
+                Err(format!("no response for {}s", since(self.heard).as_secs()))
             }
             Some(_) => Ok(false),
             None if since(self.heard) >= PING_AFTER => {

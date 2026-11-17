@@ -202,7 +202,10 @@ fn a_bad_address_is_said_so(cx: &mut TestAppContext) {
             let (input, _) = v.inputs();
             input.update(cx, |s, cx| s.set_value("not an address", window, cx));
             v.check_address(window, cx);
-            assert_eq!(v.error(), Some("That is not a server's address."));
+            assert_eq!(
+                v.error(),
+                Some("Invalid address. Enter a host name or URL.")
+            );
         })
     });
 }

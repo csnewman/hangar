@@ -120,8 +120,8 @@ fn changes_are_said_as_the_web_says_them() {
             "vCPUs 2 → 4",
             "memory 4 GB → 6 GB",
             "display desktop → headless",
-            "swap the worker's default → none",
-            "idle memory kept → handed back",
+            "swap worker default → none",
+            "idle memory reclaim off → on",
         ]
     );
     assert!(changes(&from, &from).is_empty());

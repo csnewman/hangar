@@ -168,7 +168,7 @@ impl SearchView {
     ) -> Self {
         let placeholder = match only {
             Some("Symbols") => "Go to Symbol",
-            Some("Structure") => "File Structure: type to narrow",
+            Some("Structure") => "File Structure",
             _ => "Search Everywhere",
         };
         let query = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
@@ -380,9 +380,9 @@ impl SearchView {
         out.push(Candidate {
             group: "Actions",
             label: if on {
-                "Stop opening this with Shift pressed twice".into()
+                "Disable double Shift for Search Everywhere".into()
             } else {
-                "Open this with Shift pressed twice".into()
+                "Enable double Shift for Search Everywhere".into()
             },
             also: "double shift setting".into(),
             detail: if on { "⇧⇧ on" } else { "⇧⇧ off" }.into(),
@@ -589,7 +589,7 @@ impl Render for SearchView {
                     .px(px(10.))
                     .py(px(8.))
                     .text_color(p.muted)
-                    .child("Nothing matches."),
+                    .child("No matches"),
             );
         }
         v_flex()

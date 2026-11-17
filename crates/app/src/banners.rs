@@ -86,12 +86,12 @@ pub fn banners(env: &Environment) -> Vec<Banner> {
     let d = env;
     let stopped = changeable(env);
     let stop_first = (!stopped).then_some("Stop the environment first");
-    let image = d.image.clone().unwrap_or_else(|| "its image".into());
+    let image = d.image.clone().unwrap_or_else(|| "the image".into());
     let mut out = vec![];
     if let Some(change) = &d.image_change {
         let text = if change == "upgrade" {
             format!(
-                "Its next start upgrades {image}{}, keeping a copy of its writable disk to roll back to.",
+                "Upgrade scheduled for next start: {image}{}. A copy of the writable disk is kept for rollback.",
                 env.image_update
                     .as_ref()
                     .map(|u| format!(" to {}", build(&u.digest)))
@@ -99,7 +99,7 @@ pub fn banners(env: &Environment) -> Vec<Banner> {
             )
         } else {
             format!(
-                "Its next start rolls back to {} and the writable disk it had then, losing what has been written to it since the upgrade.",
+                "Rollback scheduled for next start: {}, with the writable disk from before the upgrade. Changes made since the upgrade will be lost.",
                 d.image_rollback
                     .as_ref()
                     .map(|r| build(&r.digest))
@@ -130,7 +130,7 @@ pub fn banners(env: &Environment) -> Vec<Banner> {
                 kind: Kind::Image,
                 tone: Tone::Info,
                 text: format!(
-                    "Upgraded from {} on {}. Its writable disk from before ({}) is kept, to roll back to.",
+                    "Upgraded from {} on {}. The previous writable disk ({}) is kept for rollback.",
                     build(&r.digest),
                     r.at.format("%-d %b"),
                     crate::docker::bytes(r.size_bytes as f64)
@@ -164,7 +164,7 @@ pub fn banners(env: &Environment) -> Vec<Banner> {
             let risky =
                 u.checked && u.error.is_none() && (count > 0 || u.packages.unwrap_or_default());
             let mut text = format!(
-                "A newer build of {image} is ready ({}; this has {}).",
+                "A newer build of {image} is available: {} (current: {}).",
                 build(&u.digest),
                 d.image_digest
                     .as_deref()
@@ -173,25 +173,25 @@ pub fn banners(env: &Environment) -> Vec<Banner> {
             );
             if !u.checked {
                 text.push_str(if stopped {
-                    " Checking what upgrading would leave hidden…"
+                    " Checking for conflicting files…"
                 } else {
-                    " Stop the environment to check what upgrading would leave hidden."
+                    " Stop the environment to check for conflicting files."
                 });
             } else if let Some(e) = &u.error {
                 text.push_str(&format!(
-                    " Its changes could not be compared with the newer build: {e}"
+                    " Could not compare changes with the newer build: {e}"
                 ));
             } else if !risky {
-                text.push_str(" None of its changes hide a file the newer build changes.");
+                text.push_str(" No changed files conflict with the newer build.");
             } else {
                 if u.packages.unwrap_or_default() {
                     text.push_str(
-                        " Packages have been installed in it, whose database would hide the newer one.",
+                        " Packages were installed; the environment's package database would hide the newer build's.",
                     );
                 }
                 if count > 0 {
                     text.push_str(&format!(
-                        " {count} file{} it has changed would hide the newer build's.",
+                        " {count} changed file{} would hide updates from the newer build.",
                         if count == 1 { "" } else { "s" }
                     ));
                 }
@@ -218,7 +218,7 @@ pub fn banners(env: &Environment) -> Vec<Banner> {
                         force,
                     },
                     ready: stopped && u.checked,
-                    why: stop_first.or((!u.checked).then_some("Its files are not compared yet")),
+                    why: stop_first.or((!u.checked).then_some("Conflict check in progress")),
                 }],
                 dismissible: true,
             });
@@ -231,7 +231,7 @@ pub fn banners(env: &Environment) -> Vec<Banner> {
             kind: Kind::Template,
             tone: Tone::Info,
             text: format!(
-                "Changed from its template, {}: {}.",
+                "Differs from template {}: {}.",
                 env.template,
                 names.join(", ")
             ),
