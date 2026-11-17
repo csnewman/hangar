@@ -32,7 +32,7 @@ use serde_json::Value;
 use crate::err;
 use crate::log::Log;
 
-pub mod client;
+pub use hangar_proxmox::client;
 pub mod console;
 mod release;
 
@@ -104,36 +104,8 @@ pub struct Config {
     pub worker_vm: bool,
 }
 
-/// Whether prefix can name a place's things on Proxmox: 1 to 20 lowercase
-/// letters, digits and hyphens, starting with a letter and not ending with
-/// a hyphen, which VM names, tags and storage file names all take. Words of
-/// its own between hyphens may not be the kinds of ISO (release, image): a
-/// prefix of P-image's ISOs would be named as P's image ISOs are, and P's
-/// worker would take them for its own.
-pub fn check_prefix(prefix: &str) -> Result<(), String> {
-    let ok = (1..=20).contains(&prefix.len())
-        && prefix.starts_with(|c: char| c.is_ascii_lowercase())
-        && !prefix.ends_with('-')
-        && prefix
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-    if !ok {
-        return Err(format!(
-            "proxmox prefix {prefix:?}: 1 to 20 lowercase letters, digits and hyphens, \
-             starting with a letter and not ending with a hyphen"
-        ));
-    }
-    if prefix.split('-').any(|w| ISO_KINDS.contains(&w)) {
-        return Err(format!(
-            "proxmox prefix {prefix:?}: it may not have {} as a word, which name kinds of ISO",
-            ISO_KINDS.join(" or ")
-        ));
-    }
-    Ok(())
-}
-
-/// The kinds of ISO a place keeps, which their names say after its prefix.
-const ISO_KINDS: [&str; 2] = ["release", "image"];
+pub use hangar_proxmox::hangar::check_prefix;
+use hangar_proxmox::hangar::{is_own_iso, short_hash};
 
 /// One Proxmox node, as the worker uses it.
 /// The RAM a VM boots with under memory hotplug, which it always has
@@ -427,12 +399,7 @@ impl Pve {
             }
         }
         let current = self.release.lock().unwrap().clone();
-        let mine = |n: &str| {
-            ISO_KINDS
-                .iter()
-                .any(|k| n.starts_with(&format!("{}-{k}-", self.cfg.prefix)))
-                && n.ends_with(".iso")
-        };
+        let mine = |n: &str| is_own_iso(&self.cfg.prefix, n);
         for volid in self.isos().await? {
             let name = volid.rsplit('/').next().unwrap_or_default().to_string();
             let recent = self
@@ -827,16 +794,6 @@ fn vm_name(prefix: &str, name: &str) -> String {
         .collect::<String>()
         .trim_end_matches('-')
         .to_string()
-}
-
-/// Twelve hex digits of a string's SHA-256.
-fn short_hash(s: &str) -> String {
-    ring::digest::digest(&ring::digest::SHA256, s.as_bytes())
-        .as_ref()
-        .iter()
-        .take(6)
-        .map(|b| format!("{b:02x}"))
-        .collect()
 }
 
 /// Where a system's isolinux keeps the El Torito boot image and the module

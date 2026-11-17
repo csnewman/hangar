@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 use hangar_api::{RELEASE_ISO_FILE, Release};
 use hangar_images::{Client as Images, Reference};
 
-use super::{Pve, RELEASE_SLOT, client::enc, short_hash};
+use hangar_proxmox::hangar::release_key;
+
+use super::{Pve, RELEASE_SLOT, client::enc};
 use crate::err;
 
 /// Where the worker VM's SMBIOS UUID is, which its config's smbios1 has.
@@ -186,21 +188,4 @@ impl Pve {
             .await
             .map(|_| ())
     }
-}
-
-/// What a release's ISO is named by: a version that is a commit's hash, as
-/// published releases' are, by its first 12 digits; another made of what a
-/// file name takes, as it is; anything else by its hash.
-fn release_key(version: &str) -> String {
-    let v = version.to_ascii_lowercase();
-    if v.len() >= 12 && v.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return v[..12].to_string();
-    }
-    if (1..=32).contains(&v.len())
-        && v.bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.')
-    {
-        return v;
-    }
-    short_hash(version)
 }

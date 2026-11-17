@@ -37,18 +37,7 @@ impl Client {
     /// (USER@REALM!ID=SECRET), taking the certificate with fingerprint, or
     /// with none, one the system's roots vouch for.
     pub fn new(url: &str, token: &str, fingerprint: Option<&str>) -> io::Result<Client> {
-        let rest = url
-            .trim_end_matches('/')
-            .strip_prefix("https://")
-            .ok_or_else(|| err(format!("proxmox url {url:?}: want https://host:port")))?;
-        let (host, port) = match rest.rsplit_once(':') {
-            Some((h, p)) if !h.ends_with(']') || h.starts_with('[') => (
-                h.trim_matches(['[', ']']).to_string(),
-                p.parse()
-                    .map_err(|_| err(format!("proxmox url {url:?}: a bad port")))?,
-            ),
-            _ => (rest.trim_matches(['[', ']']).to_string(), 8006),
-        };
+        let (host, port) = host_port(url)?;
         let token = token.trim();
         if !token.contains('!') || !token.contains('=') {
             return Err(err(
@@ -305,6 +294,24 @@ impl Client {
         let upid = self.send(req, "POST", &path).await?;
         Ok(upid.as_str().unwrap_or_default().to_string())
     }
+}
+
+/// The host and port of an API's url (https://host:port; 8006 unless it
+/// says).
+pub fn host_port(url: &str) -> io::Result<(String, u16)> {
+    let rest = url
+        .trim()
+        .trim_end_matches('/')
+        .strip_prefix("https://")
+        .ok_or_else(|| err(format!("proxmox url {url:?}: want https://host:port")))?;
+    Ok(match rest.rsplit_once(':') {
+        Some((h, p)) if !h.ends_with(']') || h.starts_with('[') => (
+            h.trim_matches(['[', ']']).to_string(),
+            p.parse()
+                .map_err(|_| err(format!("proxmox url {url:?}: a bad port")))?,
+        ),
+        _ => (rest.trim_matches(['[', ']']).to_string(), 8006),
+    })
 }
 
 /// A path segment or form value, percent-encoded but for what needs none.

@@ -333,6 +333,25 @@ impl Client {
         Ok(())
     }
 
+    /// The configuration of the image r names at digest, this platform's
+    /// where it is an index: its labels, among the rest, as a manifest
+    /// and its config blob say, each checked against its digest.
+    pub fn config(&self, r: &Reference, digest: &str) -> io::Result<serde_json::Value> {
+        let pinned = r.at(digest);
+        let mut repo = self.repo(&pinned)?;
+        let manifest = platform_manifest(&mut repo, &pinned, digest)?;
+        let body =
+            read_all(repo.send("GET", &format!("/blobs/{}", manifest.config.digest), None)?)?;
+        let got = format!("sha256:{}", hex::encode(Sha256::digest(&body)));
+        if got != manifest.config.digest {
+            return Err(other(format!(
+                "the config {} arrived as {got}",
+                manifest.config.digest
+            )));
+        }
+        serde_json::from_slice(&body).map_err(|e| other(format!("{pinned}: its config: {e}")))
+    }
+
     /// Fetches one regular file of the image r names at digest into out,
     /// as the image's tree has it: read from the topmost layer holding it,
     /// and not there if a layer above deletes it or its directory. Layers
@@ -349,19 +368,7 @@ impl Client {
         let pinned = r.at(digest);
         let mut repo = self.repo(&pinned)?;
         fs::create_dir_all(scratch)?;
-        let mut body = repo.manifest(digest)?;
-        let value: serde_json::Value = serde_json::from_slice(&body)
-            .map_err(|e| other(format!("{pinned}: its manifest: {e}")))?;
-        if value.get("manifests").is_some() {
-            let index: Vec<Descriptor> = serde_json::from_value(value["manifests"].clone())
-                .map_err(|e| other(format!("{pinned}: its index: {e}")))?;
-            let chosen = pick_platform(&index).ok_or_else(|| {
-                other(format!("{pinned} has no image for linux/{}", guest_arch()))
-            })?;
-            body = repo.manifest(&chosen.digest)?;
-        }
-        let manifest: Manifest = serde_json::from_slice(&body)
-            .map_err(|e| other(format!("{pinned}: its manifest: {e}")))?;
+        let manifest = platform_manifest(&mut repo, &pinned, digest)?;
         let want = path.trim_matches('/');
         let gone = || {
             io::Error::new(
@@ -399,6 +406,21 @@ impl Client {
         }
         Err(gone())
     }
+}
+
+/// The manifest digest names, through an index to this platform's.
+fn platform_manifest(repo: &mut Repo, pinned: &Reference, digest: &str) -> io::Result<Manifest> {
+    let mut body = repo.manifest(digest)?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|e| other(format!("{pinned}: its manifest: {e}")))?;
+    if value.get("manifests").is_some() {
+        let index: Vec<Descriptor> = serde_json::from_value(value["manifests"].clone())
+            .map_err(|e| other(format!("{pinned}: its index: {e}")))?;
+        let chosen = pick_platform(&index)
+            .ok_or_else(|| other(format!("{pinned} has no image for linux/{}", guest_arch())))?;
+        body = repo.manifest(&chosen.digest)?;
+    }
+    serde_json::from_slice(&body).map_err(|e| other(format!("{pinned}: its manifest: {e}")))
 }
 
 /// Whether a layer's entry named name deletes the file want of the layers

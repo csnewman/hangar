@@ -241,6 +241,9 @@ RUN mkdir /out && sh /scripts/release-iso.sh /in/vmlinuz /in/hangar-agent /in/mk
       "$VERSION" /out/hangar-release.iso
 
 FROM scratch AS release-iso
+# The version, which whoever uploads the ISO names it by.
+ARG VERSION=dev
+LABEL org.opencontainers.image.version="$VERSION"
 COPY --from=release-iso-build /out/hangar-release.iso /
 
 # ---------------------------------------------------------------- imagebuilder

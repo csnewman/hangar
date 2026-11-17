@@ -194,6 +194,8 @@ fn a_file_is_read_from_the_topmost_layer_holding_it() {
         std::io::ErrorKind::NotFound,
         "a file a higher layer deletes"
     );
+    let config = client.config(&r, &index).unwrap();
+    assert_eq!(config["os"], "linux", "the image's config");
     let missing = client.fetch_file(&r, &index, "etc/b", &dir.join("blobs"), &dir.join("b"));
     assert_eq!(missing.unwrap_err().kind(), std::io::ErrorKind::NotFound);
     assert!(!dir.join("os-release").exists() && !dir.join("b").exists());

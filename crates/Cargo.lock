@@ -3890,6 +3890,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-proxmox"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-util",
+ "hangar-hub",
+ "hangar-images",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "ring",
+ "rustls",
+ "rustls-platform-verifier",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite 0.26.2",
+ "tokio-util",
+]
+
+[[package]]
 name = "hangar-server"
 version = "0.1.0"
 dependencies = [
@@ -3974,6 +3997,7 @@ dependencies = [
  "hangar-images",
  "hangar-layercheck",
  "hangar-nfs",
+ "hangar-proxmox",
  "http-body-util",
  "hyper",
  "hyper-util",
