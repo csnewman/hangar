@@ -79,6 +79,7 @@ pub mod termsprite;
 pub mod termstatus;
 pub mod termthemes;
 pub mod termview;
+pub mod thishangar;
 pub mod tools;
 pub mod transfer;
 pub mod treeops;

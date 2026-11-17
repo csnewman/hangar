@@ -29,6 +29,9 @@ serde_json.workspace = true
 base64.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 hangar-openapi = { path = "../openapi" }
+hangar-hub = { path = "../hub" }
+hangar-proxmox = { path = "../proxmox" }
+hangar-images = { path = "../images" }
 reqwest = { version = "0.13", default-features = false }
 tokio.workspace = true
 bytes = "1"

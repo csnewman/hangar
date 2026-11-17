@@ -59,6 +59,7 @@ fn places(connection: Connection, envs: Vec<Environment>) -> Vec<(PlaceConfig, P
             id: "p".into(),
             name: "Acme".into(),
             url: "https://hangar.acme.test".into(),
+            ..Default::default()
         },
         PlaceState {
             connection,

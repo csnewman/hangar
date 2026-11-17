@@ -56,6 +56,7 @@ fn place() -> PlaceConfig {
         id: "p".into(),
         name: "Acme".into(),
         url: "https://hangar.acme.test".into(),
+        ..Default::default()
     }
 }
 

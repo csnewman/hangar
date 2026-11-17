@@ -1,5 +1,6 @@
-//! Add a Place, as the design has it: the three kinds of place, then a
-//! server by its address, signed in through the browser. The app asks the
+//! Add a Place, as the design has it: the kinds of place, then a server by
+//! its address, signed in through the browser, or a Hangar of one's own
+//! made on a Proxmox (`proxmox`). The app asks the
 //! server for a grant, opens its page approving "Hangar Desktop on <this
 //! computer>", and collects the access token it makes once the person
 //! approves; the code is shown in case the browser asks for it. A token
@@ -21,6 +22,8 @@ use crate::places::Places;
 use crate::store;
 use crate::ui::{button, chip, disabled, primary};
 
+mod proxmox;
+
 pub enum AddPlaceEvent {
     /// The place added, or None when the user gave up.
     Done(Option<String>),
@@ -36,6 +39,16 @@ pub enum Step {
     Browser,
     /// An access token, pasted.
     Token,
+    /// A Proxmox's address, and its certificate to match.
+    Proxmox,
+    /// Its API token, checked against what a Hangar needs.
+    ProxmoxToken,
+    /// Where the Hangar goes there.
+    ProxmoxWhere,
+    /// Its name and prefix.
+    ProxmoxName,
+    /// Being made.
+    Making,
 }
 
 /// A server checked, and the grant waited on.
@@ -58,6 +71,8 @@ pub struct AddPlaceView {
     first: bool,
     /// Asking the server whether the grant is approved.
     poll: Option<Task<()>>,
+    /// Making a Hangar on a Proxmox.
+    pve: proxmox::Flow,
     focus: FocusHandle,
     _subs: Vec<gpui::Subscription>,
 }
@@ -79,13 +94,16 @@ impl AddPlaceView {
                 .masked(true)
         });
         let name = cx.new(|cx| InputState::new(window, cx));
-        let subs = vec![
-            cx.subscribe_in(&url, window, |this, _, e: &InputEvent, window, cx| {
-                if let InputEvent::PressEnter { .. } = e {
-                    this.check_address(window, cx);
-                }
-            }),
-        ];
+        let (pve, pve_subs) = proxmox::Flow::new(&name, window, cx);
+        let mut subs =
+            vec![
+                cx.subscribe_in(&url, window, |this, _, e: &InputEvent, window, cx| {
+                    if let InputEvent::PressEnter { .. } = e {
+                        this.check_address(window, cx);
+                    }
+                }),
+            ];
+        subs.extend(pve_subs);
         let first = places.read(cx).list().is_empty();
         AddPlaceView {
             places,
@@ -98,6 +116,7 @@ impl AddPlaceView {
             error: None,
             first,
             poll: None,
+            pve,
             focus: cx.focus_handle(),
             _subs: subs,
         }
@@ -323,8 +342,13 @@ impl Render for AddPlaceView {
             Step::Address => self.address(&p, cx).into_any_element(),
             Step::Browser => self.browser(&p, window, cx).into_any_element(),
             Step::Token => self.token_step(&p, cx).into_any_element(),
+            _ => self.pve_render(&p, cx),
         };
-        let width = if self.step == Step::Kinds { 620. } else { 480. };
+        let width = match self.step {
+            Step::Kinds => 620.,
+            Step::Address | Step::Browser | Step::Token => 480.,
+            _ => 540.,
+        };
         v_flex()
             .id("add-place")
             .track_focus(&self.focus)
@@ -401,6 +425,14 @@ impl AddPlaceView {
                 "A machine over SSH",
                 "Your devbox. Needs SSH and KVM there; the app installs Hangar as you, without root.",
                 soon(p),
+            ))
+            .child(card(
+                "kind-proxmox",
+                "Proxmox",
+                "A Hangar of your own in a VM on your Proxmox. Needs an API token; nothing is installed on the host.",
+                primary("kind-proxmox-go", "Set Up…", p)
+                    .on_click(cx.listener(|this, _, _, cx| this.go(Step::Proxmox, cx)))
+                    .into_any_element(),
             ))
             .child(card(
                 "kind-server",

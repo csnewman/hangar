@@ -19,6 +19,7 @@ use crate::palette::{self, Palette};
 use crate::place::Connection;
 use crate::places::Places;
 use crate::settings::{Event, FONT_SIZES, Settings, ThemeChoice, Values, Ways};
+use crate::thishangar::ThisHangarView;
 use crate::ui::{button, disabled, primary};
 
 /// A page of the settings.
@@ -30,6 +31,8 @@ pub enum Page {
     Terminal,
     Notifications,
     Places,
+    /// A Hangar the app made on a Proxmox: where it runs, its release.
+    Hangar(String),
     /// The user's account at a place.
     Account(String),
     /// A place's own pages, in the browser.
@@ -54,6 +57,7 @@ impl Page {
             Page::Terminal => "Terminal",
             Page::Notifications => "Notifications",
             Page::Places => "Places",
+            Page::Hangar(_) => "This Hangar",
             Page::Account(_) => "Account",
             Page::Browser(_) => "In the Browser",
         }
@@ -125,6 +129,15 @@ impl Page {
                 "token",
                 "add a place",
             ],
+            Page::Hangar(_) => &[
+                "proxmox",
+                "vm",
+                "upgrade",
+                "release",
+                "remove",
+                "delete",
+                "certificate",
+            ],
             Page::Account(_) => &[
                 "sign-in keys",
                 "ssh",
@@ -188,6 +201,8 @@ pub struct SettingsView {
     focus: FocusHandle,
     /// Each place's account page, made when first shown.
     accounts: Vec<(String, Entity<AccountView>)>,
+    /// Each made Hangar's page, made when first shown.
+    hangars: Vec<(String, Entity<ThisHangarView>)>,
     /// The monospaced font families installed, found when the Terminal page
     /// is first shown.
     fonts: Option<Vec<String>>,
@@ -244,6 +259,7 @@ impl SettingsView {
             folded: HashSet::new(),
             focus: cx.focus_handle(),
             accounts: vec![],
+            hangars: vec![],
             fonts: None,
             _subs: subs,
         };
@@ -336,7 +352,7 @@ impl SettingsView {
         let arranged = self.arranged(cx);
         self.places.update(cx, |p, cx| p.arrange(&arranged, cx));
         self.rows = self.place_rows(window, cx);
-        if let Page::Account(id) | Page::Browser(id) = &self.page
+        if let Page::Account(id) | Page::Browser(id) | Page::Hangar(id) = &self.page
             && self.places.read(cx).get(id).is_none()
         {
             self.page = Page::Places;
@@ -347,6 +363,16 @@ impl SettingsView {
     fn ok(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.apply(window, cx);
         cx.emit(SettingsEvent::Close);
+    }
+
+    fn hangar(&mut self, place: &str, cx: &mut Context<Self>) -> Entity<ThisHangarView> {
+        if let Some((_, v)) = self.hangars.iter().find(|(p, _)| p == place) {
+            return v.clone();
+        }
+        let places = self.places.clone();
+        let view = cx.new(|cx| ThisHangarView::new(places, place, cx));
+        self.hangars.push((place.to_string(), view.clone()));
+        view
     }
 
     fn account(
@@ -373,7 +399,7 @@ impl Render for SettingsView {
         let w = (size.width - px(40.)).min(px(960.));
         let h = (size.height - px(70.)).min(px(660.));
         let crumb = match &self.page {
-            Page::Account(id) | Page::Browser(id) => {
+            Page::Account(id) | Page::Browser(id) | Page::Hangar(id) => {
                 let name = self
                     .places
                     .read(cx)
@@ -470,7 +496,7 @@ impl SettingsView {
     fn tree(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let q = self.search.read(cx).value().to_string();
         let searching = !q.trim().is_empty();
-        let places: Vec<(String, String, bool)> = self
+        let places: Vec<(String, String, bool, bool)> = self
             .places
             .read(cx)
             .list()
@@ -480,18 +506,18 @@ impl SettingsView {
                     c.id.clone(),
                     c.name.clone(),
                     matches!(s.connection, Connection::SignIn),
+                    c.proxmox.is_some(),
                 )
             })
             .collect();
         let mut groups: Vec<(String, String, Vec<Page>, Option<&'static str>)> =
             vec![("app".into(), "App".into(), Page::APP.to_vec(), None)];
-        for (id, name, signed_out) in places {
-            groups.push((
-                id.clone(),
-                name,
-                vec![Page::Account(id.clone()), Page::Browser(id)],
-                signed_out.then_some("Sign in…"),
-            ));
+        for (id, name, signed_out, made) in places {
+            let mut pages = vec![Page::Account(id.clone()), Page::Browser(id.clone())];
+            if made {
+                pages.insert(0, Page::Hangar(id.clone()));
+            }
+            groups.push((id, name, pages, signed_out.then_some("Sign in…")));
         }
         let mut list = v_flex().gap(px(1.));
         for (key, title, pages, note) in groups {
@@ -537,6 +563,7 @@ impl SettingsView {
                 let on = page == self.page;
                 let id = match &page {
                     Page::Account(pl) => format!("settings-node-account-{pl}"),
+                    Page::Hangar(pl) => format!("settings-node-hangar-{pl}"),
                     Page::Browser(pl) => format!("settings-node-browser-{pl}"),
                     other => format!("settings-node-{}", other.title().to_lowercase()),
                 };
@@ -590,6 +617,7 @@ impl SettingsView {
             Page::Notifications => self.notifications(p, cx).into_any_element(),
             Page::Places => self.places_page(p, cx).into_any_element(),
             Page::Account(id) => self.account(&id, window, cx).into_any_element(),
+            Page::Hangar(id) => self.hangar(&id, cx).into_any_element(),
             Page::Browser(id) => self.browser(&id, p, cx).into_any_element(),
         }
     }

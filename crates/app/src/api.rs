@@ -95,7 +95,7 @@ pub enum Event {
 
 /// The runtime every call runs on: reqwest's connections need tokio's,
 /// whichever thread waits on the call.
-fn runtime() -> &'static tokio::runtime::Runtime {
+pub(crate) fn runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
@@ -105,6 +105,43 @@ fn runtime() -> &'static tokio::runtime::Runtime {
             .build()
             .expect("a tokio runtime")
     })
+}
+
+/// The certificates places are pinned to, by their origin (`store::place_id`).
+fn pins() -> &'static std::sync::RwLock<std::collections::HashMap<String, String>> {
+    static PINS: OnceLock<std::sync::RwLock<std::collections::HashMap<String, String>>> =
+        OnceLock::new();
+    PINS.get_or_init(Default::default)
+}
+
+/// Takes the server at url's HTTPS only with the certificate whose SHA-256
+/// is fingerprint: a Hangar the app made, whose certificate
+/// it made and no authority signs.
+pub fn pin(url: &str, fingerprint: &str) {
+    pins()
+        .write()
+        .unwrap()
+        .insert(crate::store::place_id(url), fingerprint.to_string());
+}
+
+/// TLS for url: to its pinned certificate, if it has one, else checked as
+/// the system checks certificates.
+pub fn tls_for(url: &str) -> Result<rustls::ClientConfig, String> {
+    let pinned = pins()
+        .read()
+        .unwrap()
+        .get(&crate::store::place_id(url))
+        .cloned();
+    match pinned {
+        Some(fp) => {
+            hangar_hub::tls::pinned(&fp, &[&rustls::version::TLS13, &rustls::version::TLS12])
+                .map_err(|e| e.to_string())
+        }
+        None => {
+            use rustls_platform_verifier::ConfigVerifierExt;
+            rustls::ClientConfig::with_platform_verifier().map_err(|e| e.to_string())
+        }
+    }
 }
 
 /// A server's client API, signed in with an access token.
@@ -130,8 +167,8 @@ impl Client {
                     .map_err(|e| e.to_string())?;
                 headers.insert(reqwest::header::AUTHORIZATION, auth);
             }
-            let builder = hangar_openapi::http_client()
-                .map_err(|e| e.to_string())?
+            let builder = reqwest::Client::builder()
+                .tls_backend_preconfigured(tls_for(url)?)
                 .default_headers(headers)
                 .user_agent(concat!("hangar-app/", env!("CARGO_PKG_VERSION")));
             let builder = if calls {

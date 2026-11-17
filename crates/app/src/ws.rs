@@ -84,9 +84,7 @@ pub fn connect(url: &str, auth: &str) -> Result<Socket, ConnectError> {
     let tcp = TcpStream::connect((host.as_str(), port)).map_err(unreachable)?;
     tcp.set_nodelay(true).map_err(unreachable)?;
     let connector = if tls {
-        use rustls_platform_verifier::ConfigVerifierExt;
-        let config =
-            rustls::ClientConfig::with_platform_verifier().map_err(|e| refused(e.to_string()))?;
+        let config = crate::api::tls_for(url).map_err(refused)?;
         Connector::Rustls(Arc::new(config))
     } else {
         Connector::Plain

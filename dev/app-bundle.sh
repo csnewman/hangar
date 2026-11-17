@@ -46,6 +46,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSLocalNetworkUsageDescription</key><string>Hangar reaches places on your network: a Proxmox it makes a Hangar on, and the Hangars there.</string>
 </dict>
 </plist>
 PLIST

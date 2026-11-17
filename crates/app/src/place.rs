@@ -14,11 +14,32 @@ use serde::{Deserialize, Serialize};
 use crate::api::{self, Client, Environment, Event, Me};
 
 /// A place the app knows: a server at an address.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct PlaceConfig {
     pub id: String,
     pub name: String,
     pub url: String,
+    /// The SHA-256 of the certificate its HTTPS presents, taken alone, for
+    /// a place whose certificate no authority signs: a Hangar the app made.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pin: String,
+    /// Where a Hangar the app made on a Proxmox is, to upgrade and remove.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxmox: Option<ProxmoxPlace>,
+}
+
+/// A Hangar the app made on a Proxmox: the Proxmox's API and certificate,
+/// and the VM and what it made there (its Proxmox token is in the
+/// keychain, beside the place's own).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProxmoxPlace {
+    pub url: String,
+    pub fingerprint: String,
+    pub node: String,
+    pub vmid: u32,
+    pub isos: String,
+    pub pool: String,
+    pub prefix: String,
 }
 
 /// How a place's connection is.

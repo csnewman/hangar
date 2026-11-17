@@ -9,7 +9,7 @@ use gpui::{App, AppContext, Context, Entity, Task};
 
 use crate::api::{self, Client};
 use crate::model::Action;
-use crate::place::{self, Connection, Connector, PlaceConfig, PlaceState, Update};
+use crate::place::{self, Connection, Connector, PlaceConfig, PlaceState, ProxmoxPlace, Update};
 use crate::store::{self, Dirs, Tokens};
 
 /// How long changes wait before what is known is written to disk, so a
@@ -130,6 +130,9 @@ impl Places {
             };
             return;
         };
+        if !config.pin.is_empty() {
+            api::pin(&config.url, &config.pin);
+        }
         let client = Client::new(&config.url, &token);
         if !self.connects {
             self.links[i] = Link {
@@ -222,12 +225,63 @@ impl Places {
                     id: id.clone(),
                     name,
                     url,
+                    ..Default::default()
                 });
             }
         }
         self.save_list();
         cx.notify();
         Ok(id)
+    }
+
+    /// Adds a Hangar the app made on a Proxmox, signed in with its first
+    /// administrator's token, its certificate pinned; the Proxmox token it
+    /// was made with kept beside that token, to upgrade and remove it.
+    pub fn add_made(
+        &mut self,
+        name: &str,
+        made: &hangar_proxmox::hangar::Made,
+        proxmox: ProxmoxPlace,
+        proxmox_token: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<String, String> {
+        let id = store::place_id(&made.url);
+        self.tokens.set(&id, &made.token)?;
+        self.tokens.set(&proxmox_token_key(&id), proxmox_token)?;
+        let config = PlaceConfig {
+            id: id.clone(),
+            name: name.trim().to_string(),
+            url: made.url.clone(),
+            pin: made.fingerprint.clone(),
+            proxmox: Some(proxmox),
+        };
+        match self.places.iter().position(|(c, _)| c.id == id) {
+            Some(i) => {
+                self.places[i].0 = config;
+                self.connect(i);
+            }
+            None => self.add_listed(config),
+        }
+        self.save_list();
+        cx.notify();
+        Ok(id)
+    }
+
+    /// Forgets a place: its token, what was known of it, and its place in
+    /// the list.
+    pub fn forget(&mut self, id: &str, cx: &mut Context<Self>) {
+        let keep: Vec<(String, String)> = self
+            .places
+            .iter()
+            .filter(|(c, _)| c.id != id)
+            .map(|(c, _)| (c.id.clone(), c.name.clone()))
+            .collect();
+        self.arrange(&keep, cx);
+    }
+
+    /// The Proxmox token a place the app made there was made with.
+    pub fn proxmox_token(&self, id: &str) -> Option<String> {
+        self.tokens.get(&proxmox_token_key(id))
     }
 
     /// Names a place as the user would have it.
@@ -255,6 +309,7 @@ impl Places {
             .collect();
         for id in &gone {
             self.tokens.delete(id);
+            self.tokens.delete(&proxmox_token_key(id));
             if let Some(d) = &self.dirs {
                 PlaceState::forget(&d.cache, id);
             }
@@ -410,10 +465,16 @@ pub fn from_env(cx: &mut App) -> Entity<Places> {
             name: id.split(':').next().unwrap_or(&id).to_string(),
             id,
             url,
+            ..Default::default()
         });
     }
     let dirs = Dirs::user();
     cx.new(|cx| Places::new(dirs, tokens, transient, cx))
+}
+
+/// Where a place's Proxmox token is kept, beside its own.
+fn proxmox_token_key(id: &str) -> String {
+    format!("{id}#proxmox")
 }
 
 /// Tokens from the first store that has them, set in the second.
