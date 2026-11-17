@@ -76,7 +76,8 @@ impl Sealer {
     }
 }
 
-fn hex(s: &str) -> Option<Vec<u8>> {
+/// The bytes s writes in hex, if it is hex.
+pub fn hex(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(2) {
         return None;
     }

@@ -96,9 +96,19 @@ fn sha256(s: &str) -> Vec<u8> {
     Sha256::digest(s.as_bytes()).to_vec()
 }
 
-/// Makes the administrator named username, with password, unless there is
-/// a user by that name; says whether it did.
-pub async fn ensure_admin(store: &Store, username: &str, password: &str) -> Result<bool> {
+/// The name of the access token an initial administrator is made with.
+pub const INITIAL_TOKEN: &str = "initial";
+
+/// Makes the administrator named username, with password and an access
+/// token whose SHA-256 is token_sha256 (INITIAL_TOKEN, never expiring),
+/// either or both, unless there is a user by that name; says whether it
+/// did.
+pub async fn ensure_admin(
+    store: &Store,
+    username: &str,
+    password: Option<&str>,
+    token_sha256: Option<&[u8]>,
+) -> Result<bool> {
     let mut tx = store.begin().await?;
     if tx.person_by_name(username).await?.is_some() {
         return Ok(false);
@@ -107,7 +117,7 @@ pub async fn ensure_admin(store: &Store, username: &str, password: &str) -> Resu
         id: Uuid::new_v4(),
         username: username.to_string(),
         display_name: String::new(),
-        password_hash: Some(hash_password(password)),
+        password_hash: password.map(hash_password),
         is_admin: true,
         kind: "person".into(),
         disabled_at: None,
@@ -122,6 +132,26 @@ pub async fn ensure_admin(store: &Store, username: &str, password: &str) -> Resu
             .details(serde_json::json!({ "admin": true })),
     )
     .await?;
+    if let Some(hash) = token_sha256 {
+        let t = AccessToken {
+            id: Uuid::new_v4(),
+            user_id: u.id,
+            name: INITIAL_TOKEN.into(),
+            token_hash: hash.to_vec(),
+            created_at: u.created_at,
+            last_used_at: None,
+            expires_at: None,
+        };
+        tx.insert_token(&t).await?;
+        audit::record(
+            &mut tx,
+            &audit::system(),
+            Event::new("token.create", "token", t.id, INITIAL_TOKEN)
+                .related("user", u.id)
+                .related("owner", u.id),
+        )
+        .await?;
+    }
     tx.commit().await?;
     Ok(true)
 }

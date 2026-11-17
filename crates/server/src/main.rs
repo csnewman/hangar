@@ -60,12 +60,20 @@ async fn run() -> Result<(), String> {
         eprintln!("hangar-server: the schema is up to date");
         return Ok(());
     }
-    if let Some((name, password)) = &cfg.initial_admin
-        && users::ensure_admin(&store, name, password)
-            .await
-            .map_err(|e| e.to_string())?
+    if let Some(a) = &cfg.initial_admin
+        && users::ensure_admin(
+            &store,
+            &a.username,
+            a.password.as_deref(),
+            a.token_sha256.as_deref(),
+        )
+        .await
+        .map_err(|e| e.to_string())?
     {
-        eprintln!("hangar-server: created the initial administrator {name}");
+        eprintln!(
+            "hangar-server: created the initial administrator {}",
+            a.username
+        );
     }
     if let Some(name) = &cfg.auto_sign_in {
         eprintln!(

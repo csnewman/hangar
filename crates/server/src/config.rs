@@ -23,7 +23,7 @@ pub struct Config {
     /// or the file `HANGAR_BOOTSTRAP_TOKEN_FILE` names).
     pub bootstrap_token: Option<String>,
     /// The administrator made at start when there is none by that name.
-    pub initial_admin: Option<(String, String)>,
+    pub initial_admin: Option<InitialAdmin>,
     /// Where Hangar is reached (`HANGAR_PUBLIC_URL`), and how its other
     /// hosts are named after it (`HANGAR_HOST_STYLE`).
     pub public: Option<Public>,
@@ -51,6 +51,19 @@ pub struct Config {
     /// for none), from the image repository `HANGAR_RELEASE_ISO_IMAGE`
     /// (Hangar's published one unless set) tagged with it.
     pub worker_release: Option<hangar_api::Release>,
+}
+
+/// The administrator made at start when there is none by that name
+/// (`HANGAR_INITIAL_ADMIN_USERNAME`, admin unless set): with the password
+/// `HANGAR_INITIAL_ADMIN_PASSWORD`, with an access token whose SHA-256 is
+/// `HANGAR_INITIAL_ADMIN_TOKEN_SHA256` (hex), or with both. A token is for
+/// whoever deploys the server and keeps the token, as the app does for a
+/// Hangar it makes: the server only ever has its hash.
+#[derive(Debug, Clone)]
+pub struct InitialAdmin {
+    pub username: String,
+    pub password: Option<String>,
+    pub token_sha256: Option<Vec<u8>>,
 }
 
 /// Where Hangar's release ISOs are published, an image per release tagged
@@ -422,11 +435,18 @@ impl Config {
             ),
             (None, None) => None,
         };
-        let initial_admin = var("HANGAR_INITIAL_ADMIN_PASSWORD").map(|pw| {
-            (
-                var("HANGAR_INITIAL_ADMIN_USERNAME").unwrap_or_else(|| "admin".into()),
-                pw,
-            )
+        let token_sha256 = var("HANGAR_INITIAL_ADMIN_TOKEN_SHA256")
+            .map(|h| {
+                crate::seal::hex(h.trim())
+                    .filter(|b| b.len() == 32)
+                    .ok_or("HANGAR_INITIAL_ADMIN_TOKEN_SHA256 is a SHA-256, as 64 hex digits")
+            })
+            .transpose()?;
+        let password = var("HANGAR_INITIAL_ADMIN_PASSWORD");
+        let initial_admin = (password.is_some() || token_sha256.is_some()).then(|| InitialAdmin {
+            username: var("HANGAR_INITIAL_ADMIN_USERNAME").unwrap_or_else(|| "admin".into()),
+            password,
+            token_sha256,
         });
         let style = Style::parse(&var("HANGAR_HOST_STYLE").unwrap_or_default())
             .map_err(|e| format!("HANGAR_HOST_STYLE: {e}"))?;

@@ -163,3 +163,33 @@ async fn the_development_stack_signs_everyone_in() {
 
     assert_eq!(status(s.anonymous().get_me().await), Some(401));
 }
+
+/// A server deployed for someone who keeps its first access token makes
+/// its first administrator with that token, of which it is given only the
+/// hash, and the token signs them in.
+#[tokio::test]
+async fn the_initial_administrator_can_be_made_with_a_token() {
+    const TOKEN: &str = "hgr_the-token-whoever-deployed-the-server-keeps";
+    let Some(s) = Server::start_with(&[
+        ("HANGAR_INITIAL_ADMIN_USERNAME", "owner".into()),
+        (
+            "HANGAR_INITIAL_ADMIN_TOKEN_SHA256",
+            "882ddafd298b36913e6dc3d653a82871a229d89ce3ddb7af6fd43011e94ec1e4".into(),
+        ),
+    ]) else {
+        return;
+    };
+    let http = s.http();
+    let me = |token: &'static str| {
+        http.get(format!("{}/api/frontend/me", s.url()))
+            .bearer_auth(token)
+            .send()
+    };
+    let r = me(TOKEN).await.expect("me");
+    assert_eq!(r.status(), 200);
+    let body: serde_json::Value = r.json().await.expect("JSON");
+    assert_eq!(body["username"], "owner");
+    assert_eq!(body["admin"], true);
+    let r = me("hgr_another-token").await.expect("me");
+    assert_eq!(r.status(), 401);
+}
