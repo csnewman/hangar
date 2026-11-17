@@ -87,6 +87,11 @@ const HUGE_PAGE_WARN_EVERY: Duration = Duration::from_secs(15 * 60);
 /// An environment's pinned copy, in its directory.
 const IMAGE_PIN_FILE: &str = "image.json";
 
+/// When a Proxmox place's ISOs are swept on their own: first once the
+/// worker has started and taken back what it left running, then hourly.
+const FIRST_SWEEP: Duration = Duration::from_secs(300);
+const SWEEP_EVERY: Duration = Duration::from_secs(3600);
+
 /// The reason a Proxmox VM left running shows while it is taken back.
 const REJOINING: &str = "reconnecting to its VM";
 
@@ -324,6 +329,9 @@ impl Runtime {
             }
         }
         rt.spawn(watch_images(Arc::downgrade(&rt), rt.stop.subscribe()));
+        if let Some(pve) = rt.cfg.proxmox.clone() {
+            rt.spawn(sweep_isos(pve, rt.stop.subscribe()));
+        }
         Ok(rt)
     }
 
@@ -909,6 +917,22 @@ fn read_image_pin(dir: &Path) -> Option<ImageCopy> {
 /// image reference an environment here is pinned to names, and tells the
 /// server when one has moved on. A copy left superseded and unused is
 /// removed.
+/// Removes the place's ISOs no VM of its uses (`Pve::sweep`) a while after
+/// the worker starts and every SWEEP_EVERY after: one a VM stopped naming
+/// (a worker VM moved to another release, say) goes even if no
+/// environment boots or goes.
+async fn sweep_isos(pve: Arc<crate::proxmox::Pve>, mut stop: watch::Receiver<bool>) {
+    let mut wait = FIRST_SWEEP;
+    loop {
+        tokio::select! {
+            _ = set(&mut stop) => return,
+            _ = tokio::time::sleep(wait) => {}
+        }
+        pve.sweep().await;
+        wait = SWEEP_EVERY;
+    }
+}
+
 async fn watch_images(rt: Weak<Runtime>, mut stop: watch::Receiver<bool>) {
     loop {
         let Some(r) = rt.upgrade() else { return };

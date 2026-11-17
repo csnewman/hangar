@@ -953,9 +953,6 @@ impl Instance {
                 n
             }
         };
-        // ISOs this boot supersedes go while it boots.
-        let p = pve.clone();
-        tokio::spawn(async move { p.sweep().await });
         // A VM still running here is one a worker started and never set
         // up, nor recorded as running (`PROXMOX_RUNNING_FILE`): it boots
         // again.
@@ -1048,8 +1045,13 @@ impl Instance {
             crate::proxmox::console::follow(pve.clone(), id, cfg.console_file.clone(), !rejoining);
         let given = match &how {
             Join::Start { image, release, .. } => {
-                pve.start(id, &reg.settings(), reg.secret(), image, release)
-                    .await
+                let started = pve
+                    .start(id, &reg.settings(), reg.secret(), image, release)
+                    .await;
+                // ISOs this start stopped the VM naming go while it boots.
+                let p = pve.clone();
+                tokio::spawn(async move { p.sweep().await });
+                started
             }
             Join::Rejoin => pve.rejoin(id, &reg.settings(), reg.secret()).await,
         };
