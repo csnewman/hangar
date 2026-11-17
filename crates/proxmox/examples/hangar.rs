@@ -87,7 +87,10 @@ async fn run(args: &[String]) -> Result<(), String> {
             let dir = Path::new(args.get(4).ok_or("no DIR")?);
             let made = kept(dir)?;
             let release = fetch(dir, &get("release", ""))?;
-            connect()?.upgrade(&made, &release).await.map_err(e)?;
+            connect()?
+                .upgrade(&made, &release, &|s| eprintln!("{s:?}"))
+                .await
+                .map_err(e)?;
             println!("moved VM {} to release {}", made.vmid, release.version);
         }
         Some("remove") => {

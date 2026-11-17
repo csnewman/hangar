@@ -34,8 +34,20 @@ pub struct ThisHangarView {
     /// The release it runs, as its server says, and the latest published.
     runs: Option<String>,
     latest: Option<String>,
+    /// An upgrade's steps: those done, and the one under way.
+    done: Vec<String>,
+    now: Option<String>,
     work: Option<Task<()>>,
 }
+
+/// What an upgrade says as it goes.
+enum Up {
+    Step(String),
+    Done(String),
+    Failed(String),
+}
+
+const CHECKING: &str = "Checking version";
 
 impl ThisHangarView {
     pub fn new(places: Entity<Places>, place: &str, cx: &mut Context<Self>) -> Self {
@@ -46,6 +58,8 @@ impl ThisHangarView {
             error: None,
             runs: None,
             latest: None,
+            done: Vec::new(),
+            now: None,
             work: None,
         };
         v.look(cx);
@@ -67,6 +81,25 @@ impl ThisHangarView {
             let _ = this.update(cx, |v, cx| {
                 v.runs = runs;
                 v.latest = latest;
+                // An upgrade ends once the Hangar says which release it runs.
+                if v.now.as_deref() == Some(CHECKING)
+                    && let Doing::Upgraded(want) = &v.doing
+                {
+                    v.now = None;
+                    match &v.runs {
+                        Some(r) if want.starts_with(r.as_str()) || r.starts_with(want.as_str()) => {
+                            v.done.push(format!("Running {}", short(r)))
+                        }
+                        Some(r) => {
+                            v.error = Some(format!(
+                                "Running {}, not {}. The new version may have failed to start.",
+                                short(r),
+                                short(want)
+                            ))
+                        }
+                        None => v.error = Some("Could not read the version.".into()),
+                    }
+                }
                 cx.notify();
             });
         }));
@@ -104,28 +137,72 @@ impl ThisHangarView {
         };
         self.doing = Doing::Upgrading;
         self.error = None;
+        self.done.clear();
+        self.now = Some("Downloading release".into());
         cx.notify();
         let dir = cache_dir();
-        let task = cx.background_spawn(async move {
+        let (tx, rx) = async_channel::unbounded::<Up>();
+        let work = cx.background_spawn(async move {
             let image = format!("{}:latest", hangar::RELEASE_ISO_IMAGE);
-            let release = hangar::fetch_release(&image, &dir).map_err(|e| e.to_string())?;
-            crate::api::runtime()
-                .block_on(pve.upgrade(&made, &release))
-                .map_err(|e| e.to_string())?;
-            Ok::<_, String>(release.version)
+            let release = match hangar::fetch_release(&image, &dir) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = tx.send_blocking(Up::Failed(format!("Download failed: {e}")));
+                    return;
+                }
+            };
+            let size = std::fs::metadata(&release.file)
+                .map(|m| m.len() >> 20)
+                .unwrap_or(0);
+            let _ = tx.send_blocking(Up::Step(format!(
+                "Downloaded release {} ({size} MB)",
+                short(&release.version)
+            )));
+            let say = tx.clone();
+            let (isos, vmid, url) = (made.isos.clone(), made.vmid, made.url.clone());
+            let r = crate::api::runtime().block_on(pve.upgrade(&made, &release, &move |s| {
+                let line = match s {
+                    hangar::Step::Uploading { name } => format!("Uploading {name} to {isos}"),
+                    hangar::Step::Attaching { name } => format!("Attaching {name} to VM {vmid}"),
+                    hangar::Step::Restarting => "Restarting VM".into(),
+                    _ => format!("Waiting for {url}"),
+                };
+                let _ = say.send_blocking(Up::Step(line));
+            }));
+            let _ = tx.send_blocking(match r {
+                Ok(()) => Up::Done(release.version),
+                Err(e) => Up::Failed(e.to_string()),
+            });
         });
         self.work = Some(cx.spawn(async move |this, cx| {
-            let r = task.await;
-            let _ = this.update(cx, |v, cx| {
-                match r {
-                    Ok(version) => v.doing = Doing::Upgraded(version),
-                    Err(e) => {
-                        v.doing = Doing::Nothing;
-                        v.error = Some(e);
+            let _work = work;
+            while let Ok(m) = rx.recv().await {
+                let over = matches!(m, Up::Done(_) | Up::Failed(_));
+                let _ = this.update(cx, |v, cx| {
+                    let finished = v.now.take();
+                    match m {
+                        Up::Step(line) if line.starts_with("Downloaded") => v.done.push(line),
+                        Up::Step(line) => {
+                            v.done.extend(finished);
+                            v.now = Some(line);
+                        }
+                        Up::Done(version) => {
+                            v.done.extend(finished);
+                            v.now = Some(CHECKING.into());
+                            v.doing = Doing::Upgraded(version);
+                            v.look(cx);
+                        }
+                        Up::Failed(e) => {
+                            v.doing = Doing::Nothing;
+                            v.error = Some(e);
+                        }
                     }
+                    cx.notify();
+                });
+                if over {
+                    return;
                 }
-                cx.notify();
-            });
+            }
         }));
     }
 
@@ -237,12 +314,10 @@ impl Render for ThisHangarView {
             (Some(r), Some(l)) => !l.starts_with(r.as_str()) && !r.starts_with(l.as_str()),
             _ => false,
         };
+        let (done, now) = (self.done.clone(), self.now.clone());
         let (release_note, release_aside) = match (&self.doing, &self.runs, &self.latest) {
             (Doing::Upgrading, ..) => ("Upgrading…".to_string(), None),
-            (Doing::Upgraded(v), ..) => (
-                format!("Upgraded to {}", short(v)),
-                Some(" · the VM is restarting".to_string()),
-            ),
+            (Doing::Upgraded(v), ..) => (format!("Upgraded to {}", short(v)), None),
             (_, Some(r), Some(l)) if newer => (
                 format!("Update available: {}", short(l)),
                 Some(format!(" · installed {}", short(r))),
@@ -295,7 +370,21 @@ impl Render for ThisHangarView {
                             )
                             .child(div().text_size(px(11.)).text_color(p.muted).child(
                                 "The VM restarts during an upgrade; environments keep running. If the new version fails to start, the previous version is restored.",
-                            )),
+                            ))
+                            .when(!done.is_empty() || now.is_some(), |d| {
+                                d.child(
+                                    v_flex()
+                                        .mt(px(6.))
+                                        .gap(px(2.))
+                                        .text_size(px(11.5))
+                                        .children(done.iter().map(|l| div().child(format!("✓ {l}"))))
+                                        .when_some(now.clone(), |d, n| {
+                                            d.child(
+                                                div().text_color(p.muted).child(format!("◌ {n}")),
+                                            )
+                                        }),
+                                )
+                            }),
                     )
                     .child(match self.doing {
                         Doing::Upgrading | Doing::Removing => {

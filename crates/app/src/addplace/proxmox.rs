@@ -187,6 +187,15 @@ fn gib(bytes: u64) -> String {
     }
 }
 
+/// A node's processors: cores and threads when both are known.
+fn cpus(n: &hangar::Node) -> String {
+    match n.cores {
+        0 => format!("{} CPUs", n.cpus),
+        c if c == n.cpus => format!("{c} cores"),
+        c => format!("{c} cores · {} threads", n.cpus),
+    }
+}
+
 impl AddPlaceView {
     /// Looks at the certificate the Proxmox presents, for the person to
     /// match with the one Proxmox shows.
@@ -392,6 +401,8 @@ impl AddPlaceView {
                         hangar::Step::Settings => "Applying settings".into(),
                         hangar::Step::Address => "Waiting for IP address".into(),
                         hangar::Step::Answering { url } => format!("Waiting for {url}"),
+                        hangar::Step::Attaching { name } => format!("Attaching {name}"),
+                        hangar::Step::Restarting => "Restarting VM".into(),
                     };
                     let _ = say.send_blocking(Made2::Step(line));
                 }));
@@ -693,8 +704,8 @@ impl AddPlaceView {
                 (
                     n.name.clone(),
                     format!(
-                        "{} cores · {} of {} free",
-                        n.cpus,
+                        "{} · {} of {} free",
+                        cpus(n),
                         gib(n.free_mib << 20),
                         gib(n.memory_mib << 20)
                     ),

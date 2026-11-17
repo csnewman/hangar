@@ -287,7 +287,11 @@ pub struct Choices {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Node {
     pub name: String,
+    /// Logical CPUs (threads), what a VM's vCPUs are scheduled on.
     pub cpus: u32,
+    /// Physical cores, when the token may see them (Sys.Audit).
+    #[serde(default)]
+    pub cores: u32,
     pub memory_mib: u64,
     pub free_mib: u64,
     /// Storages for disks (images) and for ISOs the token may use there.
@@ -360,12 +364,24 @@ pub struct Made {
 /// How far making a Hangar has got.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
-    Uploading { name: String },
-    Making { vmid: u32 },
+    Uploading {
+        name: String,
+    },
+    Making {
+        vmid: u32,
+    },
     Starting,
     Settings,
     Address,
-    Answering { url: String },
+    Answering {
+        url: String,
+    },
+    /// Upgrading: the VM's CD-ROM is pointed at the release's ISO.
+    Attaching {
+        name: String,
+    },
+    /// Upgrading: the VM restarts into it.
+    Restarting,
 }
 
 /// What the token needs on a pool, to make and run a Hangar's VMs there.
@@ -487,6 +503,16 @@ impl Proxmox {
                     >> 20,
                 ..Default::default()
             };
+            if audit
+                && let Ok(st) = self
+                    .client
+                    .get(&format!("/nodes/{}/status", enc(name)))
+                    .await
+            {
+                let cpu = &st["cpuinfo"];
+                node.cores = (cpu["cores"].as_u64().unwrap_or(0)
+                    * cpu["sockets"].as_u64().unwrap_or(1)) as u32;
+            }
             let storages = self
                 .client
                 .get(&format!("/nodes/{}/storage?enabled=1", enc(name)))
@@ -912,10 +938,18 @@ impl Proxmox {
     /// Moves a Hangar to release: its ISO uploaded, put in its VM's boot
     /// CD-ROM, and the VM rebooted, which leaves its environments running
     /// for its worker to take back.
-    pub async fn upgrade(&self, at: &Made, release: &Release) -> io::Result<()> {
+    pub async fn upgrade(
+        &self,
+        at: &Made,
+        release: &Release,
+        progress: &(dyn Fn(Step) + Send + Sync),
+    ) -> io::Result<()> {
         let iso = self
-            .upload_release(&at.node, &at.isos, &at.prefix, release, &|_| {})
+            .upload_release(&at.node, &at.isos, &at.prefix, release, progress)
             .await?;
+        progress(Step::Attaching {
+            name: iso.rsplit('/').next().unwrap_or(&iso).to_string(),
+        });
         let cdrom = format!("{iso},media=cdrom");
         self.client
             .put(
@@ -923,10 +957,21 @@ impl Proxmox {
                 &[("scsi1", cdrom.as_str())],
             )
             .await?;
+        progress(Step::Restarting);
         self.client
             .post(&self.vm(&at.node, at.vmid, "status/reboot"), &[])
-            .await
-            .map(|_| ())
+            .await?;
+        // The release it ran answers until the VM goes down.
+        let down_by = tokio::time::Instant::now() + Duration::from_secs(60);
+        while tokio::time::Instant::now() < down_by
+            && health(&at.url, &at.fingerprint).await.is_ok()
+        {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        progress(Step::Answering {
+            url: at.url.clone(),
+        });
+        healthy(&at.url, &at.fingerprint, Duration::from_secs(180)).await
     }
 
     /// Removes a Hangar and everything it made: its own VM first, so its
