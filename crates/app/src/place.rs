@@ -31,7 +31,7 @@ pub struct PlaceConfig {
 /// A Hangar the app made on a Proxmox: the Proxmox's API and certificate,
 /// and the VM and what it made there (its Proxmox token is in the
 /// keychain, beside the place's own).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ProxmoxPlace {
     pub url: String,
     pub fingerprint: String,

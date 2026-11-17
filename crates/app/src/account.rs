@@ -25,6 +25,14 @@ struct Read {
     tokens: Vec<AccessToken>,
 }
 
+/// The password form, while open.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Password {
+    /// Setting a first one: no current password.
+    Set,
+    Change,
+}
+
 /// A removal asked about, waiting for Yes.
 #[derive(Debug, Clone, PartialEq)]
 enum Asking {
@@ -46,6 +54,11 @@ pub struct AccountView {
     /// This computer's own public keys, from ~/.ssh: each one's line and
     /// fingerprint.
     local_keys: Vec<(String, String)>,
+    /// The password form, and its fields.
+    password: Option<Password>,
+    current: Entity<InputState>,
+    new_password: Entity<InputState>,
+    confirm: Entity<InputState>,
 }
 
 impl AccountView {
@@ -56,6 +69,11 @@ impl AccountView {
         });
         let key_name =
             cx.new(|cx| InputState::new(window, cx).placeholder("Key name, e.g. github"));
+        let masked = |window: &mut Window, cx: &mut Context<Self>| {
+            cx.new(|cx| InputState::new(window, cx).masked(true))
+        };
+        let (current, new_password, confirm) =
+            (masked(window, cx), masked(window, cx), masked(window, cx));
         let mut view = AccountView {
             client,
             read: None,
@@ -65,6 +83,10 @@ impl AccountView {
             pasted,
             key_name,
             local_keys: local_keys(),
+            password: None,
+            current,
+            new_password,
+            confirm,
         };
         view.reload(cx);
         view
@@ -143,6 +165,124 @@ impl AccountView {
         self.key_name
             .update(cx, |s, cx| s.set_value("", window, cx));
         self.change(move |c| c.generate_ssh_key(&name).map(|_| ()), cx);
+    }
+
+    /// Sets or changes the password as the form says, the form closing
+    /// once it is done.
+    fn save_password(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = self.password else {
+            return;
+        };
+        let current = self.current.read(cx).value().to_string();
+        let new = self.new_password.read(cx).value().to_string();
+        if new.chars().count() < 8 {
+            self.error = Some("The password must be at least 8 characters.".into());
+            cx.notify();
+            return;
+        }
+        if new != self.confirm.read(cx).value().as_ref() {
+            self.error = Some("The passwords do not match.".into());
+            cx.notify();
+            return;
+        }
+        for f in [&self.current, &self.new_password, &self.confirm] {
+            f.update(cx, |s, cx| s.set_value("", window, cx));
+        }
+        self.password = None;
+        self.change(
+            move |c| {
+                let current = (form == Password::Change).then_some(current.as_str());
+                c.change_password(current, &new)
+            },
+            cx,
+        );
+    }
+
+    /// The Password section: whether one is set, and the form to set or
+    /// change it.
+    fn password_section(&self, me: &Me, p: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let set = me.has_password == Some(true);
+        let mut section = v_flex().gap(px(8.)).child(section("Password", p));
+        let Some(form) = self.password else {
+            let (state, help) = match (set, me.admin) {
+                (true, _) => ("Set", "Signs you in to this place's web pages."),
+                (false, true) => (
+                    "Not set",
+                    "Set a password to sign in to this place's web pages from other devices.",
+                ),
+                (false, false) => (
+                    "Not set",
+                    "An administrator can set a password for your account.",
+                ),
+            };
+            let mut row = h_flex()
+                .gap(px(10.))
+                .child(div().w(px(84.)).text_color(p.muted).child(state))
+                .child(div().flex_1().min_w_0().text_color(p.muted).child(help));
+            if set || me.admin {
+                let (label, form) = if set {
+                    ("Change Password…", Password::Change)
+                } else {
+                    ("Set Password…", Password::Set)
+                };
+                row = row.child(button("password-open", label, p).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.password = Some(form);
+                        this.error = None;
+                        cx.notify();
+                    },
+                )));
+            }
+            return section.child(row).into_any_element();
+        };
+        let field = |label: &'static str, input: &Entity<InputState>| {
+            h_flex()
+                .gap(px(10.))
+                .child(
+                    div()
+                        .w(px(120.))
+                        .flex_none()
+                        .text_color(p.muted)
+                        .child(label),
+                )
+                .child(div().flex_1().min_w_0().child(Input::new(input)))
+        };
+        if form == Password::Change {
+            section = section.child(field("Current password", &self.current));
+        }
+        section
+            .child(field("New password", &self.new_password))
+            .child(field("Confirm", &self.confirm))
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .justify_end()
+                    .child(button("password-cancel", "Cancel", p).on_click(cx.listener(
+                        |this, _, window, cx| {
+                            this.password = None;
+                            for f in [&this.current, &this.new_password, &this.confirm] {
+                                f.update(cx, |s, cx| s.set_value("", window, cx));
+                            }
+                            cx.notify();
+                        },
+                    )))
+                    .child(if self.busy {
+                        disabled("password-save", "Saving…", p).into_any_element()
+                    } else {
+                        primary(
+                            "password-save",
+                            if form == Password::Set {
+                                "Set Password"
+                            } else {
+                                "Change Password"
+                            },
+                            p,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| this.save_password(window, cx)))
+                        .into_any_element()
+                    }),
+            )
+            .into_any_element()
     }
 
     /// A Remove button, or Yes and No once it is asked.
@@ -235,6 +375,12 @@ impl Render for AccountView {
                         .child(div().font_family(crate::diff::mono()).child(cmd)),
                 );
             }
+        }
+
+        if let Some(me) = &read.me
+            && me.has_password.is_some()
+        {
+            page = page.child(self.password_section(me, &p, cx));
         }
 
         // Sign-in keys, and this computer's own keys not among them.

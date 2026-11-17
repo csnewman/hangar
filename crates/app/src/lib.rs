@@ -11,6 +11,7 @@ pub mod blame;
 pub mod brackets;
 pub mod branch;
 pub mod branches;
+pub mod certtrust;
 pub mod changes;
 pub mod channel;
 pub mod code;

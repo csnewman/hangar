@@ -3894,7 +3894,7 @@ impl EnvTab {
     /// settings, stopping it, its SSH command, resetting it to its
     /// template, the web UI's page, and deleting it; what cannot be taken
     /// back is asked first.
-    fn env_menu(&self, env: &Environment, web: String, cx: &mut Context<Self>) -> impl IntoElement {
+    fn env_menu(&self, env: &Environment, cx: &mut Context<Self>) -> impl IntoElement {
         let (place, id, name) = (self.place.clone(), self.env.clone(), env.name.clone());
         let ssh = self
             .places
@@ -3932,7 +3932,6 @@ impl EnvTab {
                     }
                 };
                 let copy_ssh = ssh.clone();
-                let web = web.clone();
                 let me = me.clone();
                 menu.action_context(focus.clone())
                     .menu("Settings…", Box::new(crate::shell::EnvironmentSettings))
@@ -3979,10 +3978,12 @@ impl EnvTab {
                             model::Action::Reset,
                         )),
                 )
-                .item(
+                .item({
+                    let (places, place) = (places.clone(), place.clone());
+                    let path = format!("/environments/{id}");
                     PopupMenuItem::new("Open in Browser")
-                        .on_click(move |_, _, cx| cx.open_url(&web)),
-                )
+                        .on_click(move |_, _, cx| Places::open_web(&places, &place, &path, cx))
+                })
                 .separator()
                 .item(PopupMenuItem::new("Delete…").on_click(ask(
                     format!("Delete {name}?"),
@@ -4038,7 +4039,6 @@ impl EnvTab {
             "stopped" | "failed" => Some(("Start", model::Action::Start)),
             _ => None,
         };
-        let web = format!("{}/environments/{}", config.url, env.id);
 
         let title =
             match &self.task_edit {
@@ -4153,7 +4153,7 @@ impl EnvTab {
                     })),
                 )
             })
-            .child(self.env_menu(env, web, cx))
+            .child(self.env_menu(env, cx))
     }
 
     /// The ports the environment's network reaches, as the toolbar's

@@ -3747,7 +3747,6 @@ dependencies = [
  "gpui-pre-platform",
  "hangar-ghostty",
  "hangar-hub",
- "hangar-images",
  "hangar-openapi",
  "hangar-proto",
  "hangar-proxmox",
@@ -3766,8 +3765,10 @@ dependencies = [
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "sha1 0.10.7",
  "sha2 0.10.9",
  "similar",
+ "tempfile",
  "tokio",
  "tungstenite 0.26.2",
 ]
@@ -3904,15 +3905,18 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "rcgen",
  "ring",
  "rustls",
  "rustls-platform-verifier",
  "serde",
  "serde_json",
+ "time",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite 0.26.2",
  "tokio-util",
+ "x509-parser",
 ]
 
 [[package]]

@@ -217,6 +217,28 @@ impl Client {
         }
     }
 
+    /// A link that signs a browser in to the server's web pages once, as
+    /// the user this token is: a path on the server, which then goes on to
+    /// the path to.
+    pub fn sign_in_link(&self, to: &str) -> Result<String, Error> {
+        let body = types::NewSignInLink {
+            to: (!to.is_empty()).then(|| to.to_string()),
+        };
+        self.call(|c| c.create_sign_in_link(&body)).map(|l| l.path)
+    }
+
+    /// Changes the user's password, given the current one, or sets an
+    /// administrator's first.
+    pub fn change_password(&self, current: Option<&str>, new: &str) -> Result<(), Error> {
+        let body = types::ChangePassword {
+            current_password: current.map(str::to_string),
+            new_password: new
+                .parse()
+                .map_err(|e| Error::Status(400, format!("{e}")))?,
+        };
+        self.call(|c| c.change_password(&body))
+    }
+
     pub fn login_keys(&self) -> Result<Vec<LoginKey>, Error> {
         let first = self.call(|c| c.list_login_keys())?;
         self.all(first)

@@ -22,7 +22,7 @@ use crate::places::Places;
 use crate::store;
 use crate::ui::{button, chip, disabled, primary};
 
-mod proxmox;
+pub(crate) mod proxmox;
 
 pub enum AddPlaceEvent {
     /// The place added, or None when the user gave up.

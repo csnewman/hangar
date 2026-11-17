@@ -347,6 +347,32 @@ impl Places {
         let _ = dirs.save_places(&listed);
     }
 
+    /// Opens path among a place's web pages in this computer's browser,
+    /// signed in as the app is there: through a link its server makes, else
+    /// the page as it is (a server without sign-in links).
+    pub fn open_web(places: &Entity<Places>, place: &str, path: &str, cx: &mut App) {
+        let ps = places.read(cx);
+        let Some((config, _)) = ps.get(place) else {
+            return;
+        };
+        let base = config.url.trim_end_matches('/').to_string();
+        let plain = format!("{base}{path}");
+        let Some(client) = ps.client(place) else {
+            cx.open_url(&plain);
+            return;
+        };
+        let path = path.to_string();
+        let task = cx.background_spawn(async move { client.sign_in_link(&path) });
+        cx.spawn(async move |cx| {
+            let url = match task.await {
+                Ok(link) => format!("{base}{link}"),
+                Err(_) => plain,
+            };
+            cx.update(|cx| cx.open_url(&url));
+        })
+        .detach();
+    }
+
     pub fn client(&self, place: &str) -> Option<Client> {
         let i = self.places.iter().position(|(c, _)| c.id == place)?;
         self.links[i].client.clone()

@@ -155,6 +155,11 @@ pub fn show_fingerprint(fingerprint: &str) -> String {
 /// SHA-256 (lower-case hex), taken without checking: for a person to match
 /// with what Proxmox shows of its own before it is pinned.
 pub async fn certificate(url: &str) -> io::Result<String> {
+    Ok(hangar_hub::tls::fingerprint(&presented(url).await?))
+}
+
+/// The certificate the server at url presents, DER, taken without checking.
+pub async fn presented(url: &str) -> io::Result<rustls::pki_types::CertificateDer<'static>> {
     let (host, port) = host_port(url)?;
     let seen = Arc::new(std::sync::Mutex::new(None));
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(
@@ -188,9 +193,9 @@ pub async fn certificate(url: &str) -> io::Result<String> {
     fp.ok_or_else(|| err(format!("{host}:{port} presented no certificate")))
 }
 
-/// Takes any certificate, keeping its fingerprint.
+/// Takes any certificate, keeping it.
 #[derive(Debug)]
-struct Recorder(Arc<std::sync::Mutex<Option<String>>>);
+struct Recorder(Arc<std::sync::Mutex<Option<rustls::pki_types::CertificateDer<'static>>>>);
 
 impl rustls::client::danger::ServerCertVerifier for Recorder {
     fn verify_server_cert(
@@ -201,7 +206,7 @@ impl rustls::client::danger::ServerCertVerifier for Recorder {
         _: &[u8],
         _: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        *self.0.lock().unwrap() = Some(hangar_hub::tls::fingerprint(end_entity));
+        *self.0.lock().unwrap() = Some(end_entity.clone().into_owned());
         Ok(rustls::client::danger::ServerCertVerified::assertion())
     }
 
@@ -237,6 +242,26 @@ pub struct Release {
     pub version: String,
 }
 
+/// The version of the release the image names, as its label says, else
+/// its digest's, without fetching the ISO. It blocks.
+pub fn release_version(image: &str) -> io::Result<String> {
+    let r = hangar_images::Reference::parse(image)
+        .map_err(|e| err(format!("release image {image}: {e}")))?;
+    hangar_images::set_guest_arch("amd64");
+    let images = hangar_images::Client::new(Default::default(), None);
+    let digest = images.resolve(&r)?;
+    let config = images.config(&r, &digest)?;
+    Ok(version_of(&config, &digest))
+}
+
+fn version_of(config: &Value, digest: &str) -> String {
+    config["config"]["Labels"][VERSION_LABEL]
+        .as_str()
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| digest.trim_start_matches("sha256:")[..12].to_string())
+}
+
 /// Fetches the release image names (RELEASE_ISO_IMAGE:latest, say) into
 /// dir: its ISO, as RELEASE_ISO_FILE there, and its version, from its label,
 /// else its digest's. It blocks.
@@ -247,11 +272,7 @@ pub fn fetch_release(image: &str, dir: &Path) -> io::Result<Release> {
     let images = hangar_images::Client::new(Default::default(), None);
     let digest = images.resolve(&r)?;
     let config = images.config(&r, &digest)?;
-    let version = config["config"]["Labels"][VERSION_LABEL]
-        .as_str()
-        .filter(|v| !v.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| digest.trim_start_matches("sha256:")[..12].to_string());
+    let version = version_of(&config, &digest);
     std::fs::create_dir_all(dir)?;
     let file = dir.join(RELEASE_ISO_FILE);
     let scratch = dir.join("blobs");
@@ -359,6 +380,46 @@ pub struct Made {
     /// Its first administrator's access token, kept apart from the rest.
     #[serde(skip_serializing, default)]
     pub token: String,
+}
+
+/// A Hangar of its own found on a Proxmox (`Proxmox::hangars`): where its
+/// VM is, what it was made with, and the release it boots.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Found {
+    pub node: String,
+    pub vmid: u32,
+    pub prefix: String,
+    pub pool: String,
+    pub disks: String,
+    pub isos: String,
+    pub network: String,
+    pub cores: u32,
+    pub memory_mib: u32,
+    pub data_gib: u32,
+    /// The release its VM boots, by its ISO's key (`release_key`); empty
+    /// for an ISO not named as its prefix's releases are.
+    pub release: String,
+    pub running: bool,
+    /// Its address, while it runs and its agent says.
+    pub address: Option<Ipv4Addr>,
+}
+
+impl Found {
+    /// The plan it was made with, for admin.
+    pub fn plan(&self, admin: &str) -> Plan {
+        Plan {
+            node: self.node.clone(),
+            disks: self.disks.clone(),
+            isos: self.isos.clone(),
+            network: self.network.clone(),
+            pool: self.pool.clone(),
+            prefix: self.prefix.clone(),
+            admin: admin.to_string(),
+            cores: self.cores,
+            memory_mib: self.memory_mib,
+            data_gib: self.data_gib,
+        }
+    }
 }
 
 /// How far making a Hangar has got.
@@ -674,14 +735,10 @@ impl Proxmox {
             .upload_release(&plan.node, &plan.isos, &plan.prefix, release, progress)
             .await?;
         let (token, token_sha256) = owner_token();
-        let (cert, key) = hangar_hub::tls::generate()?;
-        let fingerprint = hangar_hub::tls::fingerprint(&cert);
         let id = self.next_id().await?;
         progress(Step::Making { vmid: id });
-        let made = self
-            .make_vm(plan, id, &iso, &token_sha256, &cert, &key, progress)
-            .await;
-        let address = match made {
+        let made = self.make_vm(plan, id, &iso, &token_sha256, progress).await;
+        let (address, fingerprint) = match made {
             Ok(a) => a,
             Err(e) => {
                 let _ = self.destroy(&plan.node, id).await;
@@ -750,17 +807,16 @@ impl Proxmox {
             .ok_or_else(|| err(format!("proxmox gave no free VMID: {v}")))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Makes and starts the VM, and gives it its settings: its address
+    /// and its certificate's fingerprint.
     async fn make_vm(
         &self,
         plan: &Plan,
         id: u32,
         iso: &str,
         token_sha256: &str,
-        cert: &[u8],
-        key: &[u8],
         progress: &(dyn Fn(Step) + Send + Sync),
-    ) -> io::Result<Ipv4Addr> {
+    ) -> io::Result<(Ipv4Addr, String)> {
         let node = &plan.node;
         let (vmid, cores, memory) = (
             id.to_string(),
@@ -841,38 +897,17 @@ impl Proxmox {
             .post(&self.vm(node, id, "status/start"), &[])
             .await?;
         self.wait(node, &upid).await?;
-        progress(Step::Settings);
-        let settings = json!({
-            "node": plan.prefix,
-            "proxmox": {
-                "url": self.url,
-                "token": self.token,
-                "fingerprint": self.fingerprint,
-                "node": node,
-                "storage": plan.disks,
-                "iso_storage": plan.isos,
-                "bridge": plan.network,
-                "pool": plan.pool,
-                "prefix": plan.prefix,
-            },
-            "own": {
-                "admin": plan.admin,
-                "admin_token_sha256": token_sha256,
-                "tls_cert": pem("CERTIFICATE", cert),
-                "tls_key": pem("PRIVATE KEY", key),
-            },
-        });
         self.agent_ready(node, id).await?;
-        self.client
-            .post(
-                &self.vm(node, id, "agent/file-write"),
-                &[
-                    ("file", "/dev/hangar/worker.json"),
-                    ("content", &settings.to_string()),
-                ],
-            )
-            .await?;
         progress(Step::Address);
+        let address = self.wait_address(node, id).await?;
+        progress(Step::Settings);
+        let fingerprint = self.give_settings(plan, id, address, token_sha256).await?;
+        Ok((address, fingerprint))
+    }
+
+    /// Waits for the VM's address from its network's DHCP, as its agent
+    /// says.
+    async fn wait_address(&self, node: &str, id: u32) -> io::Result<Ipv4Addr> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
         loop {
             if let Some(a) = self.address(node, id).await? {
@@ -883,6 +918,183 @@ impl Proxmox {
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
+    }
+
+    /// Writes a Hangar's settings through its VM's guest agent channel, as
+    /// plan says, with a certificate made for its address and the hash of
+    /// its first administrator's token; the certificate's fingerprint.
+    async fn give_settings(
+        &self,
+        plan: &Plan,
+        id: u32,
+        address: Ipv4Addr,
+        token_sha256: &str,
+    ) -> io::Result<String> {
+        let (cert, key) = web_certificate(address)?;
+        let settings = json!({
+            "node": plan.prefix,
+            "proxmox": {
+                "url": self.url,
+                "token": self.token,
+                "fingerprint": self.fingerprint,
+                "node": plan.node,
+                "storage": plan.disks,
+                "iso_storage": plan.isos,
+                "bridge": plan.network,
+                "pool": plan.pool,
+                "prefix": plan.prefix,
+            },
+            "own": {
+                "admin": plan.admin,
+                "admin_token_sha256": token_sha256,
+                "tls_cert": pem("CERTIFICATE", &cert),
+                "tls_key": pem("PRIVATE KEY", &key),
+            },
+        });
+        self.client
+            .post(
+                &self.vm(&plan.node, id, "agent/file-write"),
+                &[
+                    ("file", "/dev/hangar/worker.json"),
+                    ("content", &settings.to_string()),
+                ],
+            )
+            .await?;
+        Ok(hangar_hub::tls::fingerprint(&cert))
+    }
+
+    /// The Hangars of their own on this Proxmox, as far as the token sees:
+    /// VMs named `<prefix>-hangar` with Hangar's tags and their prefix.
+    pub async fn hangars(&self) -> io::Result<Vec<Found>> {
+        let resources = self.client.get("/cluster/resources?type=vm").await?;
+        let mut out = Vec::new();
+        for r in resources.as_array().into_iter().flatten() {
+            let tags: Vec<&str> = r["tags"].as_str().unwrap_or_default().split(';').collect();
+            if !tags.contains(&TAG) || !tags.contains(&WORKER_TAG) {
+                continue;
+            }
+            let Some(prefix) = tags
+                .iter()
+                .find(|t| ![TAG, WORKER_TAG, ENV_TAG, ""].contains(*t))
+            else {
+                continue;
+            };
+            let (Some(node), Some(id)) = (r["node"].as_str(), r["vmid"].as_u64()) else {
+                continue;
+            };
+            if r["name"].as_str() != Some(&format!("{prefix}-hangar")) {
+                continue;
+            }
+            let id = id as u32;
+            let config = self.client.get(&self.vm(node, id, "config")).await?;
+            let field = |k: &str| config[k].as_str().unwrap_or_default().to_string();
+            let (scsi1, virtio0, net0) = (field("scsi1"), field("virtio0"), field("net0"));
+            let volume = scsi1.split(',').next().unwrap_or_default();
+            let iso = volume.rsplit('/').next().unwrap_or_default();
+            let release = iso
+                .strip_prefix(&format!("{prefix}-release-"))
+                .and_then(|k| k.strip_suffix(".iso"))
+                .unwrap_or_default()
+                .to_string();
+            let option = |s: &str, k: &str| {
+                s.split(',')
+                    .find_map(|kv| kv.strip_prefix(&format!("{k}=")))
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let running = r["status"] == "running";
+            out.push(Found {
+                node: node.to_string(),
+                vmid: id,
+                prefix: prefix.to_string(),
+                pool: r["pool"].as_str().unwrap_or_default().to_string(),
+                disks: virtio0.split(':').next().unwrap_or_default().to_string(),
+                isos: volume.split(':').next().unwrap_or_default().to_string(),
+                network: option(&net0, "bridge"),
+                cores: number(&config["cores"]).unwrap_or(1) as u32,
+                memory_mib: number(&config["memory"]).unwrap_or(0) as u32,
+                data_gib: gib(&option(&virtio0, "size")),
+                release,
+                running,
+                address: match running {
+                    true => self.address(node, id).await?,
+                    false => None,
+                },
+            });
+        }
+        out.sort_by_key(|f| (f.prefix.clone(), f.vmid));
+        Ok(out)
+    }
+
+    /// Takes back a Hangar found here (`hangars`), as its maker does once
+    /// the token it kept is lost, with a new token for its first
+    /// administrator and a new certificate. Its VM is started if it is
+    /// stopped, moved to release first when one is given (as `upgrade`
+    /// does), and given its settings afresh, as `make` gives them, with
+    /// the new token's hash and this token for its worker. The Hangar
+    /// replaces the token its owner had with the new one, and ends their
+    /// sessions (`hangar-server`'s initial administrator).
+    pub async fn reconnect(
+        &self,
+        at: &Found,
+        release: Option<&Release>,
+        admin: &str,
+        progress: &(dyn Fn(Step) + Send + Sync),
+    ) -> io::Result<Made> {
+        let (node, id) = (at.node.as_str(), at.vmid);
+        if !at.running {
+            progress(Step::Starting);
+            let upid = self
+                .client
+                .post(&self.vm(node, id, "status/start"), &[])
+                .await?;
+            self.wait(node, &upid).await?;
+        }
+        if let Some(release) = release {
+            let iso = self
+                .upload_release(node, &at.isos, &at.prefix, release, progress)
+                .await?;
+            progress(Step::Attaching {
+                name: iso.rsplit('/').next().unwrap_or(&iso).to_string(),
+            });
+            let cdrom = format!("{iso},media=cdrom");
+            self.client
+                .put(&self.vm(node, id, "config"), &[("scsi1", cdrom.as_str())])
+                .await?;
+            progress(Step::Restarting);
+            let upid = self
+                .client
+                .post(&self.vm(node, id, "status/reboot"), &[])
+                .await?;
+            self.wait(node, &upid).await?;
+        }
+        self.agent_ready(node, id).await?;
+        progress(Step::Address);
+        let address = self.wait_address(node, id).await?;
+        let url = format!("https://{address}");
+        if release.is_some() {
+            // Its first start on the release records whom its token went
+            // to, which the new settings' token is then given to.
+            responds(&url, Duration::from_secs(180)).await?;
+        }
+        let (token, token_sha256) = owner_token();
+        progress(Step::Settings);
+        let fingerprint = self
+            .give_settings(&at.plan(admin), id, address, &token_sha256)
+            .await?;
+        progress(Step::Answering { url: url.clone() });
+        healthy(&url, &fingerprint, Duration::from_secs(180)).await?;
+        Ok(Made {
+            node: at.node.clone(),
+            vmid: id,
+            isos: at.isos.clone(),
+            pool: at.pool.clone(),
+            prefix: at.prefix.clone(),
+            address,
+            url,
+            fingerprint,
+            token,
+        })
     }
 
     async fn wait(&self, node: &str, upid: &Value) -> io::Result<()> {
@@ -1071,6 +1283,54 @@ fn owner_token() -> (String, String) {
     (token, hash)
 }
 
+/// A number Proxmox gives as one or as a string.
+fn number(v: &Value) -> Option<u64> {
+    v.as_u64().or_else(|| v.as_str()?.parse().ok())
+}
+
+/// A disk's size as Proxmox writes it (16G, 512M, 1T) in GiB.
+fn gib(size: &str) -> u32 {
+    let (n, unit) = size.split_at(
+        size.find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(size.len()),
+    );
+    let n: u64 = n.parse().unwrap_or(0);
+    (match unit {
+        "T" => n * 1024,
+        "M" => n / 1024,
+        "K" => n / (1024 * 1024),
+        _ => n,
+    }) as u32
+}
+
+/// How long a Hangar's HTTPS certificate lasts: under the 825 days Apple's
+/// platforms take for one a person trusts.
+const WEB_CERTIFICATE_DAYS: i64 = 820;
+
+/// A certificate and PKCS #8 key, both DER, for a Hangar's HTTPS at
+/// address, which a browser takes once a person trusts it: the address its
+/// name, for a TLS server alone, lasting WEB_CERTIFICATE_DAYS.
+pub fn web_certificate(address: Ipv4Addr) -> io::Result<(Vec<u8>, Vec<u8>)> {
+    let mut p = rcgen::CertificateParams::default();
+    p.subject_alt_names = vec![rcgen::SanType::IpAddress(address.into())];
+    p.distinguished_name = rcgen::DistinguishedName::new();
+    p.distinguished_name
+        .push(rcgen::DnType::CommonName, format!("Hangar {address}"));
+    p.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+    p.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
+    let mut serial = [0u8; 16];
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut serial)
+        .map_err(|_| err("no random numbers for a serial number"))?;
+    serial[0] &= 0x7f;
+    p.serial_number = Some(rcgen::SerialNumber::from_slice(&serial));
+    let now = time::OffsetDateTime::now_utc();
+    p.not_before = now - time::Duration::days(1);
+    p.not_after = now + time::Duration::days(WEB_CERTIFICATE_DAYS);
+    let key = rcgen::KeyPair::generate().map_err(io::Error::other)?;
+    let cert = p.self_signed(&key).map_err(io::Error::other)?;
+    Ok((cert.der().to_vec(), key.serialize_der()))
+}
+
 /// DER as PEM, under label.
 fn pem(label: &str, der: &[u8]) -> String {
     let b64 = base64::engine::general_purpose::STANDARD.encode(der);
@@ -1099,17 +1359,48 @@ pub async fn healthy(url: &str, fingerprint: &str, within: Duration) -> io::Resu
     }
 }
 
+/// Waits for the Hangar at url to say it is healthy over HTTPS, taking any
+/// certificate: whether it has started, and nothing more.
+async fn responds(url: &str, within: Duration) -> io::Result<()> {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        let last = match health_with(url, None).await {
+            Ok(()) => return Ok(()),
+            Err(e) => e,
+        };
+        if tokio::time::Instant::now() > deadline {
+            return Err(err(format!("Hangar at {url} did not answer: {last}")));
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
 async fn health(url: &str, fingerprint: &str) -> io::Result<()> {
+    health_with(url, Some(fingerprint)).await
+}
+
+/// Asks the Hangar at url whether it is healthy, over HTTPS to the
+/// certificate with fingerprint alone, or to any.
+async fn health_with(url: &str, fingerprint: Option<&str>) -> io::Result<()> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let host = url.trim_start_matches("https://").trim_end_matches('/');
     let (name, port) = match host.rsplit_once(':') {
         Some((h, p)) => (h.to_string(), p.parse().map_err(io::Error::other)?),
         None => (host.to_string(), 443u16),
     };
-    let config = hangar_hub::tls::pinned(
-        fingerprint,
-        &[&rustls::version::TLS13, &rustls::version::TLS12],
-    )?;
+    let config = match fingerprint {
+        Some(fp) => {
+            hangar_hub::tls::pinned(fp, &[&rustls::version::TLS13, &rustls::version::TLS12])?
+        }
+        None => rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(io::Error::other)?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(Recorder(Default::default())))
+        .with_no_client_auth(),
+    };
     let tcp = tokio::time::timeout(
         Duration::from_secs(5),
         tokio::net::TcpStream::connect((name.as_str(), port)),

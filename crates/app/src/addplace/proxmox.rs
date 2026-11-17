@@ -3,7 +3,9 @@
 //! against what a Hangar needs of it, where the Hangar goes, its name and
 //! prefix, then making it (`hangar_proxmox::hangar`): a Hangar of the
 //! person's own in a VM there, added as a place with its certificate pinned
-//! and its first access token in the keychain.
+//! and its first access token in the keychain. A Hangar already there is
+//! reconnected instead (`Proxmox::reconnect`), as on a computer that has
+//! lost the token it was made with.
 
 use gpui::{
     AnyElement, Context, Entity, FontWeight, IntoElement, ParentElement, Styled, Task, Window, div,
@@ -11,7 +13,7 @@ use gpui::{
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{h_flex, v_flex};
-use hangar_proxmox::hangar::{self, Choices, Made, Plan, Proxmox};
+use hangar_proxmox::hangar::{self, Choices, Found, Made, Plan, Proxmox};
 
 use super::{AddPlaceEvent, AddPlaceView, Step, field};
 use crate::palette::Palette;
@@ -33,9 +35,11 @@ pub struct Flow {
     /// The Proxmox's API, made whole, and its certificate, once seen.
     api: String,
     fingerprint: String,
-    /// The token, once checked, and what it may use.
+    /// The token, once checked, what it may use, and the Hangars already
+    /// there.
     token: String,
     choices: Option<Choices>,
+    found: Vec<Found>,
     node: usize,
     disks: usize,
     isos: usize,
@@ -45,7 +49,9 @@ pub struct Flow {
     /// whether the name is setting it.
     prefix_typed: bool,
     setting_prefix: bool,
-    /// Making it: the steps done, the one under way, and the work.
+    /// Making it, or reconnecting one found: the steps done, the one under
+    /// way, and the work.
+    reconnecting: bool,
     done: Vec<String>,
     now: Option<String>,
     making: Option<Task<()>>,
@@ -101,6 +107,7 @@ impl Flow {
             fingerprint: String::new(),
             token: String::new(),
             choices: None,
+            found: vec![],
             node: 0,
             disks: 0,
             isos: 0,
@@ -108,6 +115,7 @@ impl Flow {
             pool: 0,
             prefix_typed: false,
             setting_prefix: false,
+            reconnecting: false,
             done: vec![],
             now: None,
             making: None,
@@ -160,9 +168,37 @@ fn api_url(typed: &str) -> Option<String> {
     })
 }
 
+/// A place's name made of a Hangar's prefix: homelab is Homelab, team-2 is
+/// Team 2.
+fn name_of(prefix: &str) -> String {
+    let mut name = prefix.replace('-', " ");
+    if let Some(f) = name.get_mut(0..1) {
+        f.make_ascii_uppercase();
+    }
+    name
+}
+
+/// What a step of making or reconnecting a Hangar says.
+fn step_line(s: hangar::Step, isos: &str, pool: &str, prefix: &str, vmid: u32) -> String {
+    match s {
+        hangar::Step::Uploading { name } => format!("Uploading {name} to {isos}"),
+        hangar::Step::Making { vmid } => {
+            format!("Creating VM {vmid} ({prefix}-hangar) in pool {pool}")
+        }
+        hangar::Step::Starting => "Starting VM".into(),
+        hangar::Step::Settings if vmid != 0 => "Applying new access token and certificate".into(),
+        hangar::Step::Settings => "Applying settings".into(),
+        hangar::Step::Address => "Waiting for IP address".into(),
+        hangar::Step::Answering { url } => format!("Waiting for {url}"),
+        hangar::Step::Attaching { name } if vmid != 0 => format!("Attaching {name} to VM {vmid}"),
+        hangar::Step::Attaching { name } => format!("Attaching {name}"),
+        hangar::Step::Restarting => "Restarting VM".into(),
+    }
+}
+
 /// The first administrator's name: this computer's user's, as a Hangar
 /// username takes it, else owner.
-fn admin_name() -> String {
+pub fn admin_name() -> String {
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_default();
@@ -255,15 +291,20 @@ impl AddPlaceView {
         self.error = None;
         self.pve.choices = None;
         cx.notify();
-        let task =
-            cx.background_spawn(async move { crate::api::runtime().block_on(pve.choices()) });
+        let task = cx.background_spawn(async move {
+            crate::api::runtime().block_on(async {
+                let c = pve.choices().await?;
+                Ok::<_, std::io::Error>((c, pve.hangars().await.unwrap_or_default()))
+            })
+        });
         cx.spawn(async move |this, cx| {
             let r = task.await;
             let _ = this.update(cx, |v, cx| {
                 v.busy = false;
                 match r {
-                    Ok(c) => {
+                    Ok((c, found)) => {
                         v.pve.token = token;
+                        v.pve.found = found;
                         // The node with the most free memory that has all a
                         // Hangar needs, and the roomiest of each there.
                         v.pve.node = c
@@ -362,6 +403,7 @@ impl AddPlaceView {
             }
         };
         self.go(Step::Making, cx);
+        self.pve.reconnecting = false;
         self.pve.done.clear();
         self.pve.now = Some("Downloading release".into());
         let dir = crate::store::Dirs::user()
@@ -390,20 +432,7 @@ impl AddPlaceView {
                 let (isos, pool, prefix) =
                     (plan.isos.clone(), plan.pool.clone(), plan.prefix.clone());
                 let r = crate::api::runtime().block_on(pve.make(&plan, &release, &move |s| {
-                    let line = match s {
-                        hangar::Step::Uploading { name } => {
-                            format!("Uploading {name} to {isos}")
-                        }
-                        hangar::Step::Making { vmid } => {
-                            format!("Creating VM {vmid} ({prefix}-hangar) in pool {pool}")
-                        }
-                        hangar::Step::Starting => "Starting VM".into(),
-                        hangar::Step::Settings => "Applying settings".into(),
-                        hangar::Step::Address => "Waiting for IP address".into(),
-                        hangar::Step::Answering { url } => format!("Waiting for {url}"),
-                        hangar::Step::Attaching { name } => format!("Attaching {name}"),
-                        hangar::Step::Restarting => "Restarting VM".into(),
-                    };
+                    let line = step_line(s, &isos, &pool, &prefix, 0);
                     let _ = say.send_blocking(Made2::Step(line));
                 }));
                 let _ = tx.send_blocking(match r {
@@ -441,6 +470,190 @@ impl AddPlaceView {
         cx.notify();
     }
 
+    /// Reconnects the Hangar found here at i: the latest release fetched
+    /// if it boots another, then a new access token and certificate given
+    /// to it, each step said as it goes; then adds it as a place.
+    fn pve_reconnect(&mut self, i: usize, cx: &mut Context<Self>) {
+        let Some(at) = self.pve.found.get(i).cloned() else {
+            return;
+        };
+        let pve = match Proxmox::new(&self.pve.api, &self.pve.token, &self.pve.fingerprint) {
+            Ok(p) => p,
+            Err(e) => {
+                self.error = Some(e.to_string());
+                cx.notify();
+                return;
+            }
+        };
+        self.go(Step::Making, cx);
+        self.pve.reconnecting = true;
+        self.pve.done.clear();
+        self.pve.now = Some("Checking the latest release".into());
+        let dir = crate::store::Dirs::user()
+            .map(|d| d.cache.join("proxmox-release"))
+            .unwrap_or_else(|| std::env::temp_dir().join("hangar-proxmox-release"));
+        let (tx, rx) = async_channel::unbounded::<Made2>();
+        let work = {
+            let at = at.clone();
+            cx.background_spawn(async move {
+                let image = format!("{}:latest", hangar::RELEASE_ISO_IMAGE);
+                let latest = match hangar::release_version(&image) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let _ = tx.send_blocking(Made2::Failed(format!(
+                            "Could not check for updates: {e}"
+                        )));
+                        return;
+                    }
+                };
+                let short: String = latest.chars().take(7).collect();
+                let release = if hangar::release_key(&latest) == at.release {
+                    let _ = tx.send_blocking(Made2::Step(format!("Release {short} is installed")));
+                    None
+                } else {
+                    let _ = tx.send_blocking(Made2::Step("Downloading release".into()));
+                    match hangar::fetch_release(&image, &dir) {
+                        Ok(r) => {
+                            let _ = tx.send_blocking(Made2::Step(format!(
+                                "Downloaded release {short} ({} MB)",
+                                std::fs::metadata(&r.file)
+                                    .map(|m| m.len() >> 20)
+                                    .unwrap_or(0)
+                            )));
+                            Some(r)
+                        }
+                        Err(e) => {
+                            let _ =
+                                tx.send_blocking(Made2::Failed(format!("Download failed: {e}")));
+                            return;
+                        }
+                    }
+                };
+                let say = tx.clone();
+                let (isos, pool, prefix, vmid) =
+                    (at.isos.clone(), at.pool.clone(), at.prefix.clone(), at.vmid);
+                let r = crate::api::runtime().block_on(pve.reconnect(
+                    &at,
+                    release.as_ref(),
+                    &admin_name(),
+                    &move |s| {
+                        let line = step_line(s, &isos, &pool, &prefix, vmid);
+                        let _ = say.send_blocking(Made2::Step(line));
+                    },
+                ));
+                let _ = tx.send_blocking(match r {
+                    Ok(m) => Made2::Done(Box::new(m)),
+                    Err(e) => Made2::Failed(format!("Could not reconnect: {e}")),
+                });
+            })
+        };
+        let place = ProxmoxPlace {
+            url: self.pve.api.clone(),
+            fingerprint: self.pve.fingerprint.clone(),
+            node: at.node.clone(),
+            vmid: at.vmid,
+            isos: at.isos.clone(),
+            pool: at.pool.clone(),
+            prefix: at.prefix.clone(),
+            disks: at.disks.clone(),
+            network: at.network.clone(),
+            cores: at.cores,
+            memory_mib: at.memory_mib,
+            data_gib: at.data_gib,
+        };
+        let name = name_of(&at.prefix);
+        let token = self.pve.token.clone();
+        self.pve.making = Some(cx.spawn(async move |this, cx| {
+            let _work = work;
+            while let Ok(m) = rx.recv().await {
+                let finished = this
+                    .update(cx, |v, cx| v.pve_progress(m, &name, &place, &token, cx))
+                    .unwrap_or(true);
+                if finished {
+                    return;
+                }
+            }
+        }));
+        cx.notify();
+    }
+
+    /// The name of the place a Hangar found here is already added as.
+    fn pve_added_as(&self, f: &Found, cx: &gpui::App) -> Option<String> {
+        self.places
+            .read(cx)
+            .list()
+            .iter()
+            .find(|(c, _)| {
+                c.proxmox.as_ref().is_some_and(|x| {
+                    x.url == self.pve.api && x.prefix == f.prefix && x.vmid == f.vmid
+                })
+            })
+            .map(|(c, _)| c.name.clone())
+    }
+
+    /// The Hangars already on this Proxmox, each to reconnect.
+    fn pve_found(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        if self.pve.found.is_empty() {
+            return div().into_any_element();
+        }
+        let rows = self.pve.found.iter().enumerate().map(|(i, f)| {
+            let detail = format!(
+                "VM {} · node {} · {}",
+                f.vmid,
+                f.node,
+                match (f.running, f.address) {
+                    (true, Some(a)) => a.to_string(),
+                    (true, None) => "running".into(),
+                    (false, _) => "stopped".into(),
+                }
+            );
+            let action = match self.pve_added_as(f, cx) {
+                Some(name) => div()
+                    .text_size(px(11.5))
+                    .text_color(p.muted)
+                    .child(format!("Added as {name}"))
+                    .into_any_element(),
+                None if self.busy => disabled(
+                    gpui::SharedString::from(format!("pve-reconnect-{i}")),
+                    "Reconnect",
+                    p,
+                )
+                .into_any_element(),
+                None => button(
+                    gpui::SharedString::from(format!("pve-reconnect-{i}")),
+                    "Reconnect",
+                    p,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| this.pve_reconnect(i, cx)))
+                .into_any_element(),
+            };
+            h_flex()
+                .gap(px(8.))
+                .px(px(9.))
+                .py(px(5.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(p.border)
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().child(format!("{}-hangar", f.prefix)))
+                        .child(div().text_size(px(11.)).text_color(p.muted).child(detail)),
+                )
+                .child(action)
+        });
+        v_flex()
+            .gap(px(6.))
+            .pt(px(4.))
+            .child(div().font_weight(FontWeight::SEMIBOLD).child("Existing Hangars"))
+            .children(rows)
+            .child(div().text_size(px(11.5)).text_color(p.muted).child(
+                "Reconnect creates a new access token and certificate for this Mac. Environments and data are kept. The previous access token stops working.",
+            ))
+            .into_any_element()
+    }
+
     /// Takes a step of making it; whether it is over.
     fn pve_progress(
         &mut self,
@@ -454,10 +667,11 @@ impl AddPlaceView {
             Made2::Step(line) => {
                 if let Some(now) = self.pve.now.take()
                     && !now.starts_with("Downloading")
+                    && !now.starts_with("Checking")
                 {
                     self.pve.done.push(now);
                 }
-                if line.starts_with("Downloaded") {
+                if line.starts_with("Downloaded") || line.starts_with("Release ") {
                     self.pve.done.push(line);
                 } else {
                     self.pve.now = Some(line);
@@ -609,7 +823,8 @@ impl AddPlaceView {
                                 .text_color(if n.ok { p.text } else { p.bad })
                                 .child(format!("{} {}", if n.ok { "✓" } else { "✗" }, n.says))
                         })))
-                    }),
+                    })
+                    .child(self.pve_found(p, cx)),
             )
             .child(self.error_line(p))
             .child(future_step("3", "Placement", p))
@@ -874,14 +1089,23 @@ impl AddPlaceView {
             .child(self.error_line(p))
             .when(!failed, |d| {
                 d.child(div().text_size(px(11.5)).text_color(p.muted).child(
-                    "This usually takes about 30 seconds. The first environment takes about a minute longer while its base image downloads.",
+                    if self.pve.reconnecting {
+                        "This usually takes under a minute, or about two when the release is updated. Environments keep running."
+                    } else {
+                        "This usually takes about 30 seconds. The first environment takes about a minute longer while its base image downloads."
+                    },
                 ))
             })
             .when(failed, |d| {
+                let back = if self.pve.reconnecting {
+                    Step::ProxmoxToken
+                } else {
+                    Step::ProxmoxName
+                };
                 d.child(
                     h_flex().justify_end().child(
                         button("pve-back", "Back", p).on_click(
-                            cx.listener(|this, _, _, cx| this.go(Step::ProxmoxName, cx)),
+                            cx.listener(move |this, _, _, cx| this.go(back.clone(), cx)),
                         ),
                     ),
                 )

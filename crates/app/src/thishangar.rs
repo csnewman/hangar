@@ -1,17 +1,19 @@
 //! Settings › a place › This Hangar, for a Hangar the app made on a
 //! Proxmox: where it runs, its release, which the app moves it on from
-//! (the VM restarts into the new release; its environments carry on), and
-//! removing it with everything it made there.
+//! (the VM restarts into the new release; its environments carry on), its
+//! web pages and whether this computer's browsers trust its certificate,
+//! reconnecting it when it refuses the app's token, and removing it with
+//! everything it made there.
 
 use gpui::{
     Context, Entity, FontWeight, IntoElement, ParentElement, Render, Styled, Task, Window, div,
     prelude::*, px,
 };
 use gpui_component::{h_flex, v_flex};
-use hangar_proxmox::hangar::{self, Made, Proxmox};
+use hangar_proxmox::hangar::{self, Found, Made, Proxmox};
 
 use crate::palette::{self, Palette};
-use crate::place::{PlaceConfig, ProxmoxPlace};
+use crate::place::{Connection, PlaceConfig, ProxmoxPlace};
 use crate::places::Places;
 use crate::ui::{button, disabled, primary};
 
@@ -21,6 +23,7 @@ enum Doing {
     Nothing,
     Upgrading,
     Upgraded(String),
+    Reconnecting,
     /// Removing asked about, waiting for Yes.
     AskingRemove,
     Removing,
@@ -34,16 +37,24 @@ pub struct ThisHangarView {
     /// The release it runs, as its server says, and the latest published.
     runs: Option<String>,
     latest: Option<String>,
-    /// An upgrade's steps: those done, and the one under way.
+    /// An upgrade's or reconnecting's steps: those done, and the one under
+    /// way.
     done: Vec<String>,
     now: Option<String>,
     work: Option<Task<()>>,
+    /// Its certificate, as it presents it, and whether this computer's
+    /// browsers trust it; whether trusting it is under way.
+    cert: Option<Vec<u8>>,
+    trusted: Option<bool>,
+    trusting: bool,
+    trust_work: Option<Task<()>>,
 }
 
 /// What an upgrade says as it goes.
 enum Up {
     Step(String),
     Done(String),
+    Reconnected(Box<(Made, Found)>),
     Failed(String),
 }
 
@@ -61,9 +72,261 @@ impl ThisHangarView {
             done: Vec::new(),
             now: None,
             work: None,
+            cert: None,
+            trusted: None,
+            trusting: false,
+            trust_work: None,
         };
         v.look(cx);
+        v.look_trust(cx);
         v
+    }
+
+    /// Reads the certificate the Hangar presents, the pinned one alone, and
+    /// whether this computer trusts it.
+    fn look_trust(&mut self, cx: &mut Context<Self>) {
+        let Some((config, _)) = self.places.read(cx).get(&self.place) else {
+            return;
+        };
+        let (url, pin) = (config.url.clone(), config.pin.clone());
+        let host = crate::store::place_id(&url);
+        let task = cx.background_spawn(async move {
+            let der = crate::api::runtime()
+                .block_on(hangar::presented(&url))
+                .ok()
+                .filter(|d| hangar_hub::tls::fingerprint(d) == pin)?
+                .to_vec();
+            let trusted = crate::certtrust::trusted(&der, &host);
+            Some((der, trusted))
+        });
+        self.trust_work = Some(cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |v, cx| {
+                (v.cert, v.trusted) = match r {
+                    Some((der, t)) => (Some(der), Some(t)),
+                    None => (None, None),
+                };
+                v.trusting = false;
+                cx.notify();
+            });
+        }));
+    }
+
+    /// Trusts its certificate in the login keychain, or stops trusting it,
+    /// macOS asking for the user's password.
+    fn set_trust(&mut self, on: bool, cx: &mut Context<Self>) {
+        let Some(der) = self.cert.clone() else {
+            return;
+        };
+        self.trusting = true;
+        self.error = None;
+        cx.notify();
+        let task = cx.background_spawn(async move {
+            if on {
+                crate::certtrust::trust(&der)
+            } else {
+                crate::certtrust::untrust(&der)
+            }
+        });
+        self.trust_work = Some(cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |v, cx| {
+                if let Err(e) = r {
+                    v.error = Some(format!(
+                        "Could not change the certificate's trust settings: {e}"
+                    ));
+                }
+                v.look_trust(cx);
+            });
+        }));
+    }
+
+    /// Whether the Hangar refuses the app: its token, or its certificate
+    /// no longer the one pinned.
+    fn refused(&self, cx: &gpui::App) -> bool {
+        self.places
+            .read(cx)
+            .get(&self.place)
+            .is_some_and(|(_, s)| match &s.connection {
+                Connection::SignIn => true,
+                Connection::Offline { error } => error.contains("certificate"),
+                _ => false,
+            })
+    }
+
+    /// Reconnects it through Proxmox with the token kept for it: the latest
+    /// release installed if it boots another, then a new access token and
+    /// certificate given to it, each step said as it goes.
+    fn reconnect(&mut self, cx: &mut Context<Self>) {
+        let Some((_, pve, made)) = self.made(cx) else {
+            self.error = Some("No Proxmox token is stored for this place.".into());
+            cx.notify();
+            return;
+        };
+        self.doing = Doing::Reconnecting;
+        self.error = None;
+        self.done.clear();
+        self.now = Some("Finding the VM".into());
+        cx.notify();
+        let dir = cache_dir();
+        let (tx, rx) = async_channel::unbounded::<Up>();
+        let work = cx.background_spawn(async move {
+            let found = match crate::api::runtime().block_on(pve.hangars()) {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = tx.send_blocking(Up::Failed(format!("Could not reconnect: {e}")));
+                    return;
+                }
+            };
+            let Some(at) = found
+                .into_iter()
+                .find(|f| f.vmid == made.vmid && f.prefix == made.prefix)
+            else {
+                let _ = tx.send_blocking(Up::Failed(format!(
+                    "VM {} ({}-hangar) was not found on the Proxmox.",
+                    made.vmid, made.prefix
+                )));
+                return;
+            };
+            let _ = tx.send_blocking(Up::Step("Checking the latest release".into()));
+            let image = format!("{}:latest", hangar::RELEASE_ISO_IMAGE);
+            let latest = match hangar::release_version(&image) {
+                Ok(v) => v,
+                Err(e) => {
+                    let _ =
+                        tx.send_blocking(Up::Failed(format!("Could not check for updates: {e}")));
+                    return;
+                }
+            };
+            let release = if hangar::release_key(&latest) == at.release {
+                None
+            } else {
+                let _ = tx.send_blocking(Up::Step("Downloading release".into()));
+                match hangar::fetch_release(&image, &dir) {
+                    Ok(r) => {
+                        let size = std::fs::metadata(&r.file)
+                            .map(|m| m.len() >> 20)
+                            .unwrap_or(0);
+                        let _ = tx.send_blocking(Up::Step(format!(
+                            "Downloaded release {} ({size} MB)",
+                            short(&r.version)
+                        )));
+                        Some(r)
+                    }
+                    Err(e) => {
+                        let _ = tx.send_blocking(Up::Failed(format!("Download failed: {e}")));
+                        return;
+                    }
+                }
+            };
+            let say = tx.clone();
+            let (isos, vmid) = (at.isos.clone(), at.vmid);
+            let r = crate::api::runtime().block_on(pve.reconnect(
+                &at,
+                release.as_ref(),
+                &crate::addplace::proxmox::admin_name(),
+                &move |s| {
+                    let line = match s {
+                        hangar::Step::Uploading { name } => format!("Uploading {name} to {isos}"),
+                        hangar::Step::Attaching { name } => {
+                            format!("Attaching {name} to VM {vmid}")
+                        }
+                        hangar::Step::Restarting => "Restarting VM".into(),
+                        hangar::Step::Starting => "Starting VM".into(),
+                        hangar::Step::Address => "Waiting for IP address".into(),
+                        hangar::Step::Settings => {
+                            "Applying new access token and certificate".into()
+                        }
+                        hangar::Step::Answering { url } => format!("Waiting for {url}"),
+                        hangar::Step::Making { .. } => String::new(),
+                    };
+                    let _ = say.send_blocking(Up::Step(line));
+                },
+            ));
+            let _ = tx.send_blocking(match r {
+                Ok(m) => Up::Reconnected(Box::new((m, at))),
+                Err(e) => Up::Failed(format!("Could not reconnect: {e}")),
+            });
+        });
+        self.work = Some(self.follow(rx, work, cx));
+    }
+
+    /// Follows an upgrade or reconnecting, step by step.
+    fn follow(
+        &mut self,
+        rx: async_channel::Receiver<Up>,
+        work: Task<()>,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            let _work = work;
+            while let Ok(m) = rx.recv().await {
+                let over = matches!(m, Up::Done(_) | Up::Reconnected(_) | Up::Failed(_));
+                let _ = this.update(cx, |v, cx| {
+                    let finished = v.now.take();
+                    match m {
+                        Up::Step(line) if line.starts_with("Downloaded") => v.done.push(line),
+                        Up::Step(line) => {
+                            v.done.extend(finished.filter(|f| {
+                                !f.starts_with("Downloading") && !f.starts_with("Checking the")
+                            }));
+                            v.now = Some(line);
+                        }
+                        Up::Done(version) => {
+                            v.done.extend(finished);
+                            v.now = Some(CHECKING.into());
+                            v.doing = Doing::Upgraded(version);
+                            v.look(cx);
+                        }
+                        Up::Reconnected(b) => {
+                            let (made, at) = *b;
+                            v.done.extend(finished);
+                            v.reconnected(made, at, cx);
+                        }
+                        Up::Failed(e) => {
+                            v.doing = Doing::Nothing;
+                            v.error = Some(e);
+                        }
+                    }
+                    cx.notify();
+                });
+                if over {
+                    return;
+                }
+            }
+        })
+    }
+
+    /// Keeps the place as reconnecting left it: its new token and pin, and
+    /// its address, should it have moved.
+    fn reconnected(&mut self, made: Made, at: Found, cx: &mut Context<Self>) {
+        let places = self.places.read(cx);
+        let Some((config, _)) = places.get(&self.place) else {
+            return;
+        };
+        let (name, mut place) = (
+            config.name.clone(),
+            config.proxmox.clone().unwrap_or_default(),
+        );
+        let token = places.proxmox_token(&self.place).unwrap_or_default();
+        place.vmid = at.vmid;
+        let old = self.place.clone();
+        let r = self
+            .places
+            .update(cx, |p, cx| p.add_made(&name, &made, place, &token, cx));
+        self.doing = Doing::Nothing;
+        match r {
+            Ok(id) => {
+                if id != old {
+                    self.places.update(cx, |p, cx| p.forget(&old, cx));
+                    self.place = id;
+                }
+                self.done.push("Reconnected".into());
+                self.look(cx);
+                self.look_trust(cx);
+            }
+            Err(e) => self.error = Some(e),
+        }
     }
 
     /// Asks the Hangar what it runs, and the registry what the latest is.
@@ -174,36 +437,7 @@ impl ThisHangarView {
                 Err(e) => Up::Failed(e.to_string()),
             });
         });
-        self.work = Some(cx.spawn(async move |this, cx| {
-            let _work = work;
-            while let Ok(m) = rx.recv().await {
-                let over = matches!(m, Up::Done(_) | Up::Failed(_));
-                let _ = this.update(cx, |v, cx| {
-                    let finished = v.now.take();
-                    match m {
-                        Up::Step(line) if line.starts_with("Downloaded") => v.done.push(line),
-                        Up::Step(line) => {
-                            v.done.extend(finished);
-                            v.now = Some(line);
-                        }
-                        Up::Done(version) => {
-                            v.done.extend(finished);
-                            v.now = Some(CHECKING.into());
-                            v.doing = Doing::Upgraded(version);
-                            v.look(cx);
-                        }
-                        Up::Failed(e) => {
-                            v.doing = Doing::Nothing;
-                            v.error = Some(e);
-                        }
-                    }
-                    cx.notify();
-                });
-                if over {
-                    return;
-                }
-            }
-        }));
+        self.work = Some(self.follow(rx, work, cx));
     }
 
     fn remove(&mut self, cx: &mut Context<Self>) {
@@ -248,16 +482,7 @@ fn cache_dir() -> std::path::PathBuf {
 
 /// The latest published release's version, as its image's label says.
 fn latest_version() -> std::io::Result<String> {
-    let image = format!("{}:latest", hangar::RELEASE_ISO_IMAGE);
-    let r = hangar_images::Reference::parse(&image).map_err(std::io::Error::other)?;
-    hangar_images::set_guest_arch("amd64");
-    let images = hangar_images::Client::new(Default::default(), None);
-    let digest = images.resolve(&r)?;
-    let config = images.config(&r, &digest)?;
-    config["config"]["Labels"]["org.opencontainers.image.version"]
-        .as_str()
-        .map(str::to_string)
-        .ok_or_else(|| std::io::Error::other("the latest release does not say its version"))
+    hangar::release_version(&format!("{}:latest", hangar::RELEASE_ISO_IMAGE))
 }
 
 fn short(v: &str) -> String {
@@ -326,14 +551,108 @@ impl Render for ThisHangarView {
             (_, Some(r), None) => (short(r), None),
             _ => ("Checking for updates…".into(), None),
         };
+        let refused = self.refused(cx);
+        let url = config.url.clone();
         let fingerprint = hangar::show_fingerprint(&config.pin);
         let fingerprint = format!(
             "{}…:{}",
             &fingerprint[..fingerprint.len().min(6)],
             &fingerprint[fingerprint.len().saturating_sub(2)..]
         );
+        let reconnecting = self.doing == Doing::Reconnecting;
+        let steps = |done: &[String], now: &Option<String>, p: &Palette| {
+            v_flex()
+                .mt(px(6.))
+                .gap(px(2.))
+                .text_size(px(11.5))
+                .children(done.iter().map(|l| div().child(format!("✓ {l}"))))
+                .when_some(now.clone(), |d, n| {
+                    d.child(div().text_color(p.muted).child(format!("◌ {n}")))
+                })
+        };
+        let trust_row = {
+            let (state, action) = match (self.trusted, self.trusting) {
+                (_, true) => ("Waiting for macOS…", None),
+                (Some(true), _) => ("Trusted by this Mac", Some(("Remove Trust", false))),
+                (Some(false), _) => ("Not trusted", Some(("Trust in Keychain…", true))),
+                (None, _) => ("Unknown", None),
+            };
+            h_flex()
+                .max_w(px(560.))
+                .gap(px(8.))
+                .child(div().flex_none().text_color(p.muted).child("Browser trust"))
+                .child(
+                    div().flex_1().min_w_0().flex().justify_end().child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(state),
+                    ),
+                )
+                .when_some(action, |d, (label, on)| {
+                    d.child(
+                        button("hangar-trust", label, &p)
+                            .on_click(cx.listener(move |this, _, _, cx| this.set_trust(on, cx))),
+                    )
+                })
+        };
+        let web_row = {
+            let (places, place) = (self.places.clone(), self.place.clone());
+            h_flex()
+                .max_w(px(560.))
+                .gap(px(8.))
+                .child(div().flex_none().text_color(p.muted).child("Web interface"))
+                .child(
+                    div().flex_1().min_w_0().flex().justify_end().child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(url.clone()),
+                    ),
+                )
+                .child(if refused {
+                    disabled("hangar-open-web", "Open in Browser", &p).into_any_element()
+                } else {
+                    button("hangar-open-web", "Open in Browser", &p)
+                        .on_click(move |_, _, cx| Places::open_web(&places, &place, "/", cx))
+                        .into_any_element()
+                })
+        };
         v_flex()
             .gap(px(6.))
+            .when(refused || reconnecting, |d| {
+                d.child(
+                    h_flex()
+                        .max_w(px(560.))
+                        .gap(px(10.))
+                        .p(px(8.))
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(p.bad)
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(div().font_weight(FontWeight::SEMIBOLD).child(if reconnecting {
+                                    "Reconnecting…"
+                                } else {
+                                    "Access token not accepted"
+                                }))
+                                .child(div().text_size(px(11.)).text_color(p.muted).child(
+                                    "The Hangar did not accept this Mac's access token or certificate. Reconnect creates new ones through Proxmox. Environments and data are kept.",
+                                ))
+                                .when(reconnecting, |d| d.child(steps(&done, &now, &p))),
+                        )
+                        .child(if reconnecting || self.doing == Doing::Removing {
+                            disabled("hangar-reconnect", "Reconnect", &p)
+                        } else {
+                            primary("hangar-reconnect", "Reconnect", &p)
+                                .on_click(cx.listener(|this, _, _, cx| this.reconnect(cx)))
+                        }),
+                )
+            })
             .child(section("Deployment", &p))
             .child(row(
                 "Proxmox",
@@ -348,6 +667,12 @@ impl Render for ThisHangarView {
             .child(row("ISO storage", at.isos.clone(), &p))
             .when(!at.network.is_empty(), |d| d.child(row("Network", at.network.clone(), &p)))
             .child(row("Pool", at.pool.clone(), &p))
+            .child(section("Web Access", &p))
+            .child(web_row)
+            .child(trust_row)
+            .child(div().max_w(px(560.)).text_size(px(11.)).text_color(p.muted).child(
+                "Opening the web interface from the app signs the browser in. Browsers warn about the certificate until it is trusted; trusting it adds it to the login keychain, and macOS asks for your password. Set a password under Account to sign in from other devices.",
+            ))
             .child(section("Version", &p))
             .child(
                 h_flex()
@@ -371,23 +696,12 @@ impl Render for ThisHangarView {
                             .child(div().text_size(px(11.)).text_color(p.muted).child(
                                 "The VM restarts during an upgrade; environments keep running. If the new version fails to start, the previous version is restored.",
                             ))
-                            .when(!done.is_empty() || now.is_some(), |d| {
-                                d.child(
-                                    v_flex()
-                                        .mt(px(6.))
-                                        .gap(px(2.))
-                                        .text_size(px(11.5))
-                                        .children(done.iter().map(|l| div().child(format!("✓ {l}"))))
-                                        .when_some(now.clone(), |d, n| {
-                                            d.child(
-                                                div().text_color(p.muted).child(format!("◌ {n}")),
-                                            )
-                                        }),
-                                )
+                            .when(!reconnecting && (!done.is_empty() || now.is_some()), |d| {
+                                d.child(steps(&done, &now, &p))
                             }),
                     )
                     .child(match self.doing {
-                        Doing::Upgrading | Doing::Removing => {
+                        Doing::Upgrading | Doing::Removing | Doing::Reconnecting => {
                             disabled("hangar-upgrade", "Upgrade", &p)
                         }
                         _ if newer => primary("hangar-upgrade", "Upgrade", &p)

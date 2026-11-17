@@ -6,10 +6,13 @@
 //!   hangar make URL TOKEN_FILE FINGERPRINT DIR node=… disks=… isos=… network=… pool=… prefix=… [admin=… cores=… memory=… data=… release=IMAGE]
 //!   hangar upgrade URL TOKEN_FILE FINGERPRINT DIR [release=IMAGE]
 //!   hangar remove URL TOKEN_FILE FINGERPRINT DIR
+//!   hangar hangars URL TOKEN_FILE FINGERPRINT
+//!   hangar reconnect URL TOKEN_FILE FINGERPRINT DIR prefix=… [admin=… release=IMAGE]
 //!
-//! TOKEN_FILE holds the Proxmox API token (USER@REALM!ID=SECRET). make keeps
-//! what it made in DIR: made.json, and the Hangar's first access token in
-//! owner-token (0600), neither printed.
+//! TOKEN_FILE holds the Proxmox API token (USER@REALM!ID=SECRET). make and
+//! reconnect keep what they made in DIR: made.json, and the Hangar's first
+//! access token in owner-token (0600), neither printed. reconnect moves the
+//! Hangar to the release first unless it boots it already.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -99,7 +102,52 @@ async fn run(args: &[String]) -> Result<(), String> {
             connect()?.remove(&made).await.map_err(e)?;
             println!("removed VM {} and all named {}-", made.vmid, made.prefix);
         }
-        _ => return Err("probe, choices, make, upgrade or remove: see the source's head".into()),
+        Some("hangars") => {
+            let found = connect()?.hangars().await.map_err(e)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&found).map_err(|e| e.to_string())?
+            );
+        }
+        Some("reconnect") => {
+            let pve = connect()?;
+            let dir = Path::new(args.get(4).ok_or("no DIR")?);
+            let prefix = get("prefix", "");
+            let found = pve.hangars().await.map_err(e)?;
+            let at = found
+                .iter()
+                .find(|f| f.prefix == prefix)
+                .ok_or(format!("no Hangar with prefix {prefix:?} here"))?;
+            let image = match get("release", "") {
+                i if i.is_empty() => format!("{RELEASE_ISO_IMAGE}:latest"),
+                i => i,
+            };
+            let latest = hangar::release_version(&image).map_err(e)?;
+            let release = match hangar::release_key(&latest) == at.release {
+                true => None,
+                false => Some(fetch(dir, &image)?),
+            };
+            let t0 = std::time::Instant::now();
+            let made = pve
+                .reconnect(at, release.as_ref(), &get("admin", "owner"), &|s| {
+                    eprintln!("{:6.1} s  {s:?}", t0.elapsed().as_secs_f64());
+                })
+                .await
+                .map_err(e)?;
+            keep(dir, &made)?;
+            println!(
+                "reconnected VM {} at {} in {:.1} s",
+                made.vmid,
+                made.url,
+                t0.elapsed().as_secs_f64()
+            );
+        }
+        _ => {
+            return Err(
+                "probe, choices, make, upgrade, remove, hangars or reconnect: see the source's head"
+                    .into(),
+            );
+        }
     }
     Ok(())
 }

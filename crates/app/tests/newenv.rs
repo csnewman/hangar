@@ -140,6 +140,7 @@ fn its_key_opens_it_and_create_opens_the_new_environment(cx: &mut TestAppContext
                 admin: false,
                 ssh: None,
                 environment_host_suffix: None,
+                ..Default::default()
             }),
             cx,
         );

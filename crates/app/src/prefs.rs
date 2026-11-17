@@ -1201,20 +1201,20 @@ impl SettingsView {
     }
 
     fn places_page(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
-        let states: Vec<(String, Connection)> = self
+        let states: Vec<(String, Connection, bool)> = self
             .places
             .read(cx)
             .list()
             .iter()
-            .map(|(c, s)| (c.id.clone(), s.connection.clone()))
+            .map(|(c, s)| (c.id.clone(), s.connection.clone(), c.proxmox.is_some()))
             .collect();
         let last = self.rows.len().saturating_sub(1);
         let mut list = v_flex().gap(px(6.));
         for (i, row) in self.rows.iter().enumerate() {
-            let state = states
+            let (state, made) = states
                 .iter()
-                .find(|(id, _)| id == &row.id)
-                .map(|(_, c)| c.clone())
+                .find(|(id, ..)| id == &row.id)
+                .map(|(_, c, m)| (c.clone(), *m))
                 .unwrap_or_default();
             let (status, tone) = connection_label(&state, p);
             let id = row.id.clone();
@@ -1274,14 +1274,29 @@ impl SettingsView {
                             })
                             .child({
                                 let id = id.clone();
-                                button(
-                                    SharedString::from(format!("place-signin-{id}")),
-                                    "Sign In Again…",
-                                    p,
-                                )
-                                .on_click(cx.listener(
-                                    move |_, _, _, cx| cx.emit(SettingsEvent::SignIn(id.clone())),
-                                ))
+                                if made {
+                                    button(
+                                        SharedString::from(format!("place-signin-{id}")),
+                                        "Reconnect…",
+                                        p,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.show(Page::Hangar(id.clone()), cx)
+                                        },
+                                    ))
+                                } else {
+                                    button(
+                                        SharedString::from(format!("place-signin-{id}")),
+                                        "Sign In Again…",
+                                        p,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |_, _, _, cx| {
+                                            cx.emit(SettingsEvent::SignIn(id.clone()))
+                                        },
+                                    ))
+                                }
                             })
                             .child(div().flex_1())
                             .child(if row.removed {
@@ -1334,11 +1349,10 @@ impl SettingsView {
 
     fn browser(&self, id: &str, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let places = self.places.read(cx);
-        let Some((config, state)) = places.get(id) else {
+        let Some((_, state)) = places.get(id) else {
             return v_flex();
         };
         let admin = state.me.as_ref().is_some_and(|m| m.admin);
-        let base = config.url.trim_end_matches('/').to_string();
         let mut pages: Vec<(&str, &str, &str)> = vec![
             (
                 "Account",
@@ -1364,7 +1378,7 @@ impl SettingsView {
         }
         let mut list = v_flex().gap(px(2.));
         for (title, path, what) in pages {
-            let url = format!("{base}{path}");
+            let (places, place) = (self.places.clone(), id.to_string());
             list = list.child(
                 h_flex()
                     .id(SharedString::from(format!("browser-{path}")))
@@ -1381,7 +1395,7 @@ impl SettingsView {
                             .child(format!("{title} ↗")),
                     )
                     .child(div().flex_1().text_color(p.muted).child(what))
-                    .on_click(move |_, _, cx| cx.open_url(&url)),
+                    .on_click(move |_, _, cx| Places::open_web(&places, &place, path, cx)),
             );
         }
         v_flex()

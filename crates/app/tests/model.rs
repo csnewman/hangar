@@ -309,6 +309,7 @@ fn an_environment_is_reached_over_ssh() {
         admin: false,
         ssh,
         environment_host_suffix: None,
+        ..Default::default()
     };
     let dev = env("dev", "running");
     assert_eq!(
@@ -341,6 +342,7 @@ fn the_list_narrows_to_whose_and_a_search() {
             admin: true,
             ssh: None,
             environment_host_suffix: None,
+            ..Default::default()
         }),
         environments: vec![mine, theirs],
         ..Default::default()

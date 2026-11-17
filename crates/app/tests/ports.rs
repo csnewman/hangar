@@ -195,6 +195,7 @@ fn the_ports_are_listed_and_made_public(cx: &mut TestAppContext) {
                 admin: false,
                 ssh: None,
                 environment_host_suffix: Some(".hangar.test".into()),
+                ..Default::default()
             }),
             cx,
         );

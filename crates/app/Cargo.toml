@@ -31,7 +31,6 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 hangar-openapi = { path = "../openapi" }
 hangar-hub = { path = "../hub" }
 hangar-proxmox = { path = "../proxmox" }
-hangar-images = { path = "../images" }
 reqwest = { version = "0.13", default-features = false }
 tokio.workspace = true
 bytes = "1"
@@ -40,6 +39,7 @@ dirs = "6"
 tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-platform-verifier = "0.7"
+sha1 = "0.10"
 sha2 = "0.10"
 keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "crypto-rust", "async-io"] }
 
@@ -50,6 +50,7 @@ libc.workspace = true
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSProcessInfo", "NSString"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSDockTile", "NSGraphics", "NSResponder", "NSSound"] }
+tempfile = "3"
 
 [features]
 # The dev build's control port (src/control.rs), and what it needs of gpui:

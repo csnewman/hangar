@@ -633,6 +633,17 @@ impl Shell {
     /// Opens the form adding a place, at a place's address, to sign it in
     /// again.
     pub fn sign_in_again(&mut self, place: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // A Hangar the app made is reconnected through its Proxmox, on its
+        // This Hangar page: it has no one to sign in through the browser.
+        if self
+            .places
+            .read(cx)
+            .get(place)
+            .is_some_and(|(c, _)| c.proxmox.is_some())
+        {
+            self.open_settings(Some(Page::Hangar(place.to_string())), window, cx);
+            return;
+        }
         let url = self.places.read(cx).get(place).map(|(c, _)| c.url.clone());
         self.open_add(window, cx);
         if let (Some(view), Some(url)) = (self.adding(), url) {
@@ -1576,15 +1587,9 @@ impl Shell {
                     .context_menu({
                         let me = cx.entity().downgrade();
                         let place = g.place.clone();
-                        let url = self
-                            .places
-                            .read(cx)
-                            .get(&g.place)
-                            .map(|(c, _)| c.url.clone())
-                            .unwrap_or_default();
                         move |menu, _, cx| {
                             crate::ui::modal(cx);
-                            place_menu(menu, me.clone(), place.clone(), url.clone())
+                            place_menu(menu, me.clone(), place.clone())
                         }
                     }),
             );
@@ -2049,12 +2054,12 @@ fn env_menu(
         return menu;
     };
     let places = shell.read(cx).places.clone();
-    let found = places.read(cx).get(place).and_then(|(c, s)| {
+    let found = places.read(cx).get(place).and_then(|(_, s)| {
         let e = s.environment(env)?.clone();
         let ssh = s.me.as_ref().and_then(|m| model::ssh_command(m, &e));
-        Some((c.url.clone(), e, ssh))
+        Some((e, ssh))
     });
-    let Some((url, e, ssh)) = found else {
+    let Some((e, ssh)) = found else {
         return menu;
     };
     let (place, env) = (place.to_string(), env.to_string());
@@ -2104,10 +2109,15 @@ fn env_menu(
                 }
             }),
     )
-    .item(
+    .item({
+        let (places, place, path) = (
+            places.clone(),
+            place.clone(),
+            format!("/environments/{}", e.id),
+        );
         PopupMenuItem::new("Open in Browser")
-            .on_click(move |_, _, cx| cx.open_url(&format!("{url}/environments/{}", e.id))),
-    )
+            .on_click(move |_, _, cx| Places::open_web(&places, &place, &path, cx))
+    })
     .separator()
     .item(
         PopupMenuItem::new("Delete…").on_click(move |_, window, cx| {
@@ -2125,12 +2135,7 @@ fn env_menu(
 }
 
 /// A place's menu in the sidebar.
-fn place_menu(
-    menu: PopupMenu,
-    me: gpui::WeakEntity<Shell>,
-    place: String,
-    url: String,
-) -> PopupMenu {
+fn place_menu(menu: PopupMenu, me: gpui::WeakEntity<Shell>, place: String) -> PopupMenu {
     let settings = |page: Page| {
         let me = me.clone();
         move |_: &ClickEvent, window: &mut Window, cx: &mut gpui::App| {
@@ -2151,7 +2156,15 @@ fn place_menu(
     };
     menu.item(PopupMenuItem::new("New Environment Here…").on_click(new_here))
         .separator()
-        .item(PopupMenuItem::new("Open in Browser").on_click(move |_, _, cx| cx.open_url(&url)))
+        .item({
+            let (me, place) = (me.clone(), place.clone());
+            PopupMenuItem::new("Open in Browser").on_click(move |_, _, cx| {
+                if let Some(s) = me.upgrade() {
+                    let places = s.read(cx).places.clone();
+                    Places::open_web(&places, &place, "/", cx);
+                }
+            })
+        })
         .item(PopupMenuItem::new("Sign In Again…").on_click(sign_in))
         .separator()
         .item(PopupMenuItem::new("Account…").on_click(settings(Page::Account(place.clone()))))
