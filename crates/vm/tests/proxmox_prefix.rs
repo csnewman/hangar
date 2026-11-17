@@ -22,6 +22,9 @@ fn prefixes_some_name_would_refuse() {
         "ac.me",
         "ac me",
         "abcdefghij0123456789x",
+        "image",
+        "acme-image",
+        "acme-release-2",
     ] {
         assert!(check_prefix(p).is_err(), "{p:?} taken");
     }

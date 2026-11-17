@@ -106,7 +106,10 @@ pub struct Config {
 
 /// Whether prefix can name a place's things on Proxmox: 1 to 20 lowercase
 /// letters, digits and hyphens, starting with a letter and not ending with
-/// a hyphen, which VM names, tags and storage file names all take.
+/// a hyphen, which VM names, tags and storage file names all take. Words of
+/// its own between hyphens may not be the kinds of ISO (release, image): a
+/// prefix of P-image's ISOs would be named as P's image ISOs are, and P's
+/// worker would take them for its own.
 pub fn check_prefix(prefix: &str) -> Result<(), String> {
     let ok = (1..=20).contains(&prefix.len())
         && prefix.starts_with(|c: char| c.is_ascii_lowercase())
@@ -114,15 +117,23 @@ pub fn check_prefix(prefix: &str) -> Result<(), String> {
         && prefix
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
-    if ok {
-        Ok(())
-    } else {
-        Err(format!(
+    if !ok {
+        return Err(format!(
             "proxmox prefix {prefix:?}: 1 to 20 lowercase letters, digits and hyphens, \
              starting with a letter and not ending with a hyphen"
-        ))
+        ));
     }
+    if prefix.split('-').any(|w| ISO_KINDS.contains(&w)) {
+        return Err(format!(
+            "proxmox prefix {prefix:?}: it may not have {} as a word, which name kinds of ISO",
+            ISO_KINDS.join(" or ")
+        ));
+    }
+    Ok(())
 }
+
+/// The kinds of ISO a place keeps, which their names say after its prefix.
+const ISO_KINDS: [&str; 2] = ["release", "image"];
 
 /// One Proxmox node, as the worker uses it.
 /// The RAM a VM boots with under memory hotplug, which it always has
@@ -417,7 +428,7 @@ impl Pve {
         }
         let current = self.release.lock().unwrap().clone();
         let mine = |n: &str| {
-            [("release"), ("image")]
+            ISO_KINDS
                 .iter()
                 .any(|k| n.starts_with(&format!("{}-{k}-", self.cfg.prefix)))
                 && n.ends_with(".iso")
