@@ -87,7 +87,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - id: ref
-        run: echo "image=${{ env.REGISTRY }}/$(echo '${{ github.repository }}' | tr 'A-Z' 'a-z')/worker" >> "$GITHUB_OUTPUT"
+        run: |
+          repo=${{ env.REGISTRY }}/$(echo '${{ github.repository }}' | tr 'A-Z' 'a-z')
+          echo "image=$repo/worker" >> "$GITHUB_OUTPUT"
+          echo "iso=$repo/release-iso" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -104,6 +107,23 @@ jobs:
           # the kernel -- change rarely and are what take the time.
           cache-from: type=gha,scope=worker-${{ matrix.arch }}
           cache-to: type=gha,scope=worker-${{ matrix.arch }},mode=max
+      # The release ISO a Proxmox place's VMs boot, from the same stages:
+      # an image holding /hangar-release.iso, amd64 alone (Proxmox's guests
+      # are x86_64).
+      - if: matrix.arch == 'amd64'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: crates/worker/Dockerfile
+          target: release-iso
+          build-args: VERSION=${{ github.sha }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ steps.ref.outputs.iso }}:${{ github.sha }}
+            ${{ steps.ref.outputs.iso }}:latest
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=worker-amd64
 
   worker-index:
     needs: worker

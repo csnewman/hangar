@@ -78,7 +78,7 @@ RUN apt-get update -qq \
 FROM ${UBUNTU} AS rust
 RUN apt-get update -qq \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-      build-essential ca-certificates curl git pkg-config \
+      build-essential ca-certificates curl git pkg-config musl-tools \
       meson ninja-build python3-yaml python3-mako clang libclang-dev \
       libepoxy-dev libdrm-dev libgbm-dev libvulkan-dev libegl-dev >/dev/null \
  && curl -fsSL https://sh.rustup.rs | sh -s -- -y -q --profile minimal
@@ -86,7 +86,9 @@ ENV PATH=/root/.cargo/bin:$PATH
 
 # ---------------------------------------------------------------- the worker and the guest agent
 # The agent is static, against musl: the guest's own C library is whatever
-# its image has. The worker is against the image's own.
+# its image has. The worker is against the image's own, and static too for
+# the release ISO, where nothing is beside it (crates/agent/src/worker.rs);
+# its C (zstd) needs musl's compiler and headers, which the agent's does not.
 FROM rust AS crates
 # The build the worker and the agent report themselves as.
 ARG VERSION=dev
@@ -100,6 +102,10 @@ RUN target="$(uname -m)-unknown-linux-musl" \
  && install -D "target/$target/release/hangar-agent" /out/hangar-agent \
  && HANGAR_VERSION="$VERSION" cargo build --release --locked -p hangar-worker \
  && install -D target/release/hangar-worker /out/hangar-worker \
+ && t=$(echo "$target" | tr - _) \
+ && env "CC_$t=musl-gcc" "CFLAGS_$t=" HANGAR_VERSION="$VERSION" \
+      cargo build --release --locked --target "$target" -p hangar-worker \
+ && install -D "target/$target/release/hangar-worker" /out/hangar-worker-static \
  && cd / && rm -rf /src /root/.cargo/registry /root/.cargo/git
 
 # ---------------------------------------------------------------- Cloud Hypervisor
@@ -185,6 +191,29 @@ COPY --from=mke2fs /out/mke2fs /usr/share/hangar/mke2fs
 COPY --from=kernel /out/vmlinuz /out/vmlinu[x] /usr/share/hangar/
 ENTRYPOINT ["hangar-worker"]
 CMD ["-config", "/etc/hangar/worker.yaml"]
+
+# ---------------------------------------------------------------- release ISO
+# What a Proxmox place's VMs boot, worker VM and environments alike
+# (deploy/proxmox/release-iso.sh): amd64 alone, as Proxmox's guests are
+# x86_64 and Ubuntu has no isolinux for arm64. Published as an image holding
+# the one file, /hangar-release.iso:
+#
+#   docker build -f crates/worker/Dockerfile --target release-iso -o out .
+FROM ${UBUNTU} AS release-iso-build
+ARG VERSION=dev
+RUN apt-get update -qq \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+      xorriso isolinux syslinux-common cpio ca-certificates >/dev/null \
+ && rm -rf /var/lib/apt/lists/*
+COPY deploy/proxmox/release-iso.sh /scripts/release-iso.sh
+COPY --from=kernel /out/vmlinuz /in/
+COPY --from=crates /out/hangar-agent /out/hangar-worker-static /in/
+COPY --from=mke2fs /out/mke2fs /in/
+RUN mkdir /out && sh /scripts/release-iso.sh /in/vmlinuz /in/hangar-agent /in/mke2fs \
+      /in/hangar-worker-static /etc/ssl/certs/ca-certificates.crt "$VERSION" /out/hangar-release.iso
+
+FROM scratch AS release-iso
+COPY --from=release-iso-build /out/hangar-release.iso /
 
 # ---------------------------------------------------------------- imagebuilder
 # Builds a distribution's images the way `hangar build` does: /out/minimal
