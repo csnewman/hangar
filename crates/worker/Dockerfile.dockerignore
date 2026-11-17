@@ -10,6 +10,7 @@
 !gpu/virglrenderer/
 !images/
 !dev/krun-build.sh
+!deploy/proxmox/release-iso.sh
 crates/agent/tests/service/node_modules
 crates/target
 crates/krun/libkrun
