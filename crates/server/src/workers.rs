@@ -187,6 +187,7 @@ pub async fn desired(
             .collect(),
         remove_environments: forget,
         registry: registry.to_string(),
+        release: None,
     }))
 }
 

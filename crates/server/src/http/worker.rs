@@ -167,7 +167,10 @@ async fn desired(
         .map(|p| p.name("registry"))
         .unwrap_or_default();
     match workers::desired(&app.store, id, after, &registry).await? {
-        Some(set) => Ok(Json(set)),
+        Some(mut set) => {
+            set.release = app.cfg.worker_release.clone();
+            Ok(Json(set))
+        }
         None => Err(ApiError::new(
             StatusCode::UNAUTHORIZED,
             "invalid credential",

@@ -199,7 +199,8 @@ impl Store {
         self.inner.lock().unwrap().hangar = hangar;
     }
 
-    fn client(&self) -> Client {
+    /// A client for the registries, signed in to each as the store is.
+    pub fn client(&self) -> Client {
         let hangar = self.inner.lock().unwrap().hangar.clone();
         Client::new(self.auth.clone(), hangar)
     }

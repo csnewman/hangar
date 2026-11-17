@@ -97,6 +97,10 @@ impl crate::Runtime for Arc<runtime::Runtime> {
         runtime::Runtime::use_registry(self, hangar);
     }
 
+    fn follow_release(&self, release: &hangar_api::Release) {
+        runtime::Runtime::follow_release(self, release, crate::VERSION);
+    }
+
     fn gpu(&self) -> Option<GpuInfo> {
         runtime::Runtime::gpu(self).cloned()
     }

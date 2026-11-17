@@ -162,3 +162,40 @@ fn references_read_as_dockers() {
         "registry-1.docker.io"
     );
 }
+
+#[test]
+fn a_file_is_read_from_the_topmost_layer_holding_it() {
+    let s = store();
+    let index = s.index.clone();
+    let dir = scratch("fetch-file");
+    let (addr, _) = serve(s, Sign::Basic);
+    let hangar = HangarRegistry {
+        host: "registry.hangar.test".into(),
+        url: format!("http://{addr}/api/worker/v1/registry"),
+        credential: "hgw_cred".into(),
+    };
+    let client = Client::new(HashMap::new(), Some(hangar));
+    let r = Reference::parse("registry.hangar.test/test/app:v1").unwrap();
+    let out = dir.join("a");
+    client
+        .fetch_file(&r, &index, "/etc/a", &dir.join("blobs"), &out)
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "changed\n");
+
+    let deleted = client.fetch_file(
+        &r,
+        &index,
+        "etc/os-release",
+        &dir.join("blobs"),
+        &dir.join("os-release"),
+    );
+    assert_eq!(
+        deleted.unwrap_err().kind(),
+        std::io::ErrorKind::NotFound,
+        "a file a higher layer deletes"
+    );
+    let missing = client.fetch_file(&r, &index, "etc/b", &dir.join("blobs"), &dir.join("b"));
+    assert_eq!(missing.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    assert!(!dir.join("os-release").exists() && !dir.join("b").exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

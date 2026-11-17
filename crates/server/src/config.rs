@@ -46,7 +46,20 @@ pub struct Config {
     /// For development only: every visitor to the web UI without a session
     /// is signed in as this person (`HANGAR_DEV_AUTO_SIGN_IN`).
     pub auto_sign_in: Option<String>,
+    /// The release workers that change their own run
+    /// (`HANGAR_WORKER_RELEASE`, the server's own build unless set; empty
+    /// for none), from the image repository `HANGAR_RELEASE_ISO_IMAGE`
+    /// (Hangar's published one unless set) tagged with it.
+    pub worker_release: Option<hangar_api::Release>,
 }
+
+/// Where Hangar's release ISOs are published, an image per release tagged
+/// with its version.
+pub const RELEASE_ISO_IMAGE: &str = "ghcr.io/csnewman/hangar/release-iso";
+
+/// The release workers run unless HANGAR_WORKER_RELEASE says: this build's,
+/// when it was built as a release is (with HANGAR_VERSION).
+const OWN_RELEASE: Option<&str> = option_env!("HANGAR_VERSION");
 
 /// What faces the internet directly: the zone's DNS server
 /// (`HANGAR_DNS_LISTEN`), HTTPS (`HANGAR_TLS_LISTEN`), and a redirect from
@@ -443,8 +456,23 @@ impl Config {
             None
         };
         let edge = edge(var, public.as_ref())?;
+        let worker_release = match var("HANGAR_WORKER_RELEASE").or(OWN_RELEASE.map(String::from)) {
+            Some(v) if !v.trim().is_empty() => Some(hangar_api::Release {
+                iso_image: format!(
+                    "{}:{}",
+                    var("HANGAR_RELEASE_ISO_IMAGE")
+                        .as_deref()
+                        .unwrap_or(RELEASE_ISO_IMAGE)
+                        .trim_end_matches('/'),
+                    v.trim()
+                ),
+                version: v.trim().to_string(),
+            }),
+            _ => None,
+        };
         Ok(Config {
             edge,
+            worker_release,
             auto_sign_in: var("HANGAR_DEV_AUTO_SIGN_IN"),
             listen,
             storage,

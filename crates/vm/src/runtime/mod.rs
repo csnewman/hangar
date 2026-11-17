@@ -380,6 +380,18 @@ impl Runtime {
         self.store.use_registry(hangar);
     }
 
+    /// Moves the worker to the release the server names, where the worker
+    /// changes its own (a Proxmox place's worker VM, `Pve::follow`), when
+    /// it runs another (running, its own build). It returns at once.
+    pub fn follow_release(&self, release: &hangar_api::Release, running: &str) {
+        let Some(pve) = self.cfg.proxmox.clone() else {
+            return;
+        };
+        let (release, running, images) =
+            (release.clone(), running.to_string(), self.store.client());
+        tokio::spawn(async move { pve.follow(&release, &running, images).await });
+    }
+
     /// Every environment here, as it is.
     pub fn observe(self: &Arc<Self>) -> Vec<ObservedEnvironment> {
         let machines: Vec<Arc<Machine>> =
@@ -719,7 +731,10 @@ fn preflight(cfg: &Config) -> io::Result<()> {
             }
         }
     }
-    std::fs::metadata(&cfg.kernel).map_err(|e| err(format!("guest kernel: {e}")))?;
+    // A Proxmox VM given its release ISO boots that ISO's kernel.
+    if !cfg.proxmox.as_ref().is_some_and(|p| p.given_release()) {
+        std::fs::metadata(&cfg.kernel).map_err(|e| err(format!("guest kernel: {e}")))?;
+    }
     if cfg.agent.as_os_str().is_empty() {
         return Err(err(
             "no agent: every environment boots with the worker's (vm.agent)",

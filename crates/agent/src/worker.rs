@@ -7,15 +7,21 @@
 //! trusts.
 //!
 //! As PID 1 it gives the data disk a filesystem the first time and mounts it
-//! at /data, mounts the release ISO (LUN 1) at /release, puts the guest's
-//! firewall up with the hub's port open, gets an address by DHCP
-//! (`crate::dhcp`), and answers the guest agent channel (`crate::qga`),
-//! through which whoever made the VM writes its settings (SETTINGS, JSON),
-//! kept on the data disk for every later boot, since nothing of them is in
-//! the VM's configuration. With settings and an address it writes the
-//! worker's configuration and runs the worker, again whenever it exits or
-//! either changes, and reaps whatever else exits. A shutdown through the
-//! agent channel stops the worker, unmounts the data disk and powers off.
+//! at /data, copies the worker from the release ISO (LUN 1) onto it and lets
+//! the ISO go, puts the guest's firewall up with the hub's port open, gets
+//! an address by DHCP (`crate::dhcp`), and answers the guest agent channel
+//! (`crate::qga`), through which whoever made the VM writes its settings
+//! (SETTINGS, JSON), kept on the data disk for every later boot, since
+//! nothing of them is in the VM's configuration. With settings and an
+//! address it writes the worker's configuration and runs the worker, again
+//! whenever it exits or either changes, and reaps whatever else exits. A
+//! shutdown through the agent channel stops the worker, unmounts the data
+//! disk and powers off.
+//!
+//! Nothing runs from the ISO, so the worker can change the VM's to another
+//! release's as it runs, as it does to move to the release its server names,
+//! then reboot into it. The worker of the release booted before is kept, and
+//! run should the new one keep failing.
 
 /// Where the worker VM's maker writes its settings through the guest agent
 /// channel: root's alone.
@@ -47,10 +53,18 @@ mod role {
     const DATA_SERIAL: &str = "hangar-data";
     const UPPER_SERIAL: &str = "hangar-upper";
     const DATA: &str = "/data";
-    /// The release ISO, read-only: the worker, the kernel environments
-    /// boot, the certificates.
+    /// Where the release ISO is mounted while its worker is copied off it.
     const RELEASE: &str = "/release";
     const RELEASE_DEVICE: &str = "scsi:1";
+    /// The worker of the release booted, and of the one before it, as the
+    /// ISO has them: the worker, the certificates it trusts, its version.
+    const CURRENT: &str = "/data/release";
+    const PREVIOUS: &str = "/data/release-previous";
+    const RELEASE_FILES: [&str; 3] = ["hangar-worker", "ca-certificates.crt", "VERSION"];
+    /// How many times a new release's worker may fail, within how long of
+    /// the boot, before the one before it is run.
+    const FAILURES: usize = 3;
+    const FAILING_WITHIN: Duration = Duration::from_secs(600);
     /// The settings, kept.
     const KEPT: &str = "/data/worker.json";
     const CONFIG: &str = "/data/worker.yaml";
@@ -93,8 +107,9 @@ mod role {
         #[serde(default)]
         pool: String,
         prefix: String,
-        /// The release ISO the worker VM booted, which environments boot
-        /// too, by its volume's ID.
+        /// A release ISO environments boot, by its volume's ID; empty, the
+        /// one the worker VM booted.
+        #[serde(default)]
         release_iso: String,
     }
 
@@ -128,8 +143,8 @@ mod role {
     /// the console, and then never: PID 1 exiting panics the kernel.
     pub fn run() -> ! {
         match prepare() {
-            Ok(()) => match tokio::runtime::Runtime::new() {
-                Ok(rt) => rt.block_on(serve()),
+            Ok(fresh) => match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt.block_on(serve(fresh)),
                 Err(e) => eprintln!("INITRAMFS: worker VM: {e}"),
             },
             Err(e) => eprintln!("INITRAMFS: worker VM: {e}"),
@@ -140,7 +155,9 @@ mod role {
         }
     }
 
-    fn prepare() -> io::Result<()> {
+    /// Readies the machine to run the worker; whether the release booted
+    /// is another than the boot before's.
+    fn prepare() -> io::Result<bool> {
         // SAFETY: the name is valid for its length.
         unsafe { libc::sethostname(HOSTNAME.as_ptr().cast(), HOSTNAME.len()) };
         let data = boot::device(&format!("serial:{DATA_SERIAL}"))
@@ -155,6 +172,13 @@ mod role {
         boot::mount(&release, RELEASE, "iso9660", libc::MS_RDONLY, "").map_err(boot::context(
             &format!("mounting the release ISO ({release})"),
         ))?;
+        let fresh = take_release();
+        // SAFETY: umount2(2) of a path of ours.
+        unsafe {
+            let r = std::ffi::CString::new(RELEASE).unwrap_or_default();
+            libc::umount2(r.as_ptr(), libc::MNT_DETACH);
+        }
+        let fresh = fresh.map_err(boot::context("copying the worker off the release ISO"))?;
         for (d, mode) in [("/etc", 0o755), ("/tmp", 0o1777), ("/run", 0o755)] {
             boot::mkdir(d, mode)?;
         }
@@ -165,24 +189,73 @@ mod role {
         )?;
         crate::firewall::open_tcp(HUB_PORT);
         crate::firewall::install().map_err(boot::context("putting the firewall in place"))?;
-        eprintln!("INITRAMFS: worker VM: data disk {data}, release ISO {release}");
-        Ok(())
+        eprintln!(
+            "INITRAMFS: worker VM: data disk {data}, release {} from {release}{}",
+            version(CURRENT),
+            if fresh { " (new)" } else { "" }
+        );
+        Ok(fresh)
     }
 
-    async fn serve() {
+    /// Copies the release's worker off its ISO, mounted at RELEASE, to
+    /// CURRENT, unless it is there already, moving what was there to
+    /// PREVIOUS; whether it was not there.
+    fn take_release() -> io::Result<bool> {
+        let iso = Path::new(RELEASE);
+        let same = RELEASE_FILES.iter().all(|f| {
+            match (
+                std::fs::read(iso.join(f)),
+                std::fs::read(Path::new(CURRENT).join(f)),
+            ) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => false,
+            }
+        });
+        if same {
+            return Ok(false);
+        }
+        let new = format!("{CURRENT}.new");
+        let _ = std::fs::remove_dir_all(&new);
+        std::fs::create_dir(&new)?;
+        for f in RELEASE_FILES {
+            std::fs::copy(iso.join(f), Path::new(&new).join(f))?;
+        }
+        if Path::new(CURRENT).exists() {
+            let _ = std::fs::remove_dir_all(PREVIOUS);
+            std::fs::rename(CURRENT, PREVIOUS)?;
+        }
+        std::fs::rename(&new, CURRENT)?;
+        // SAFETY: sync(2).
+        unsafe { libc::sync() };
+        Ok(true)
+    }
+
+    /// The version of the release whose worker is in dir.
+    fn version(dir: &str) -> String {
+        std::fs::read_to_string(Path::new(dir).join("VERSION"))
+            .map(|v| v.trim().to_string())
+            .unwrap_or_else(|_| "unknown".into())
+    }
+
+    async fn serve(fresh: bool) {
         std::thread::spawn(reap);
         tokio::spawn(crate::qga::serve());
         tokio::spawn(crate::firewall::keep());
         let (tx, rx) = watch::channel(None);
         tokio::spawn(crate::dhcp::run(HOSTNAME.to_string(), tx));
-        supervise(rx).await
+        supervise(rx, fresh).await
     }
 
     /// Runs the worker with the settings and the address it has, again
-    /// whenever it exits or either changes.
-    async fn supervise(mut lease: watch::Receiver<Option<Lease>>) {
-        let (exited_tx, mut exited) = watch::channel(0u64);
+    /// whenever it exits or either changes. A new release's worker that
+    /// fails FAILURES times within FAILING_WITHIN of the boot gives way to
+    /// the release's before it, for the rest of the boot.
+    async fn supervise(mut lease: watch::Receiver<Option<Lease>>, fresh: bool) {
+        let (exited_tx, mut exited) = watch::channel((0u64, 0i32));
         EXITED.get_or_init(|| exited_tx);
+        let booted = Instant::now();
+        let mut failures = 0;
+        let mut dir = CURRENT;
         let mut said = false;
         loop {
             let Some(settings) = read_settings() else {
@@ -206,7 +279,7 @@ mod role {
                 continue;
             }
             exited.borrow_and_update();
-            let pid = match start() {
+            let pid = match start(dir) {
                 Ok(p) => p,
                 Err(e) => {
                     eprintln!("hangar-agent: worker VM: starting the worker: {e}");
@@ -214,7 +287,10 @@ mod role {
                     continue;
                 }
             };
-            eprintln!("hangar-agent: worker VM: the worker runs (pid {pid}) at {address}");
+            eprintln!(
+                "hangar-agent: worker VM: the worker of release {} runs (pid {pid}) at {address}",
+                version(dir)
+            );
             let restart = loop {
                 tokio::select! {
                     _ = exited.changed() => break false,
@@ -237,6 +313,18 @@ mod role {
                 );
                 stop(pid).await;
             } else {
+                let status = exited.borrow().1;
+                if status != 0 && fresh && dir == CURRENT && booted.elapsed() < FAILING_WITHIN {
+                    failures += 1;
+                    if failures >= FAILURES && Path::new(PREVIOUS).join("hangar-worker").exists() {
+                        eprintln!(
+                            "hangar-agent: worker VM: the worker of release {} failed {failures} times; running release {}'s",
+                            version(CURRENT),
+                            version(PREVIOUS)
+                        );
+                        dir = PREVIOUS;
+                    }
+                }
                 eprintln!("hangar-agent: worker VM: the worker exited; starting it again");
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
@@ -288,9 +376,9 @@ mod role {
                 "files": "/data/files",
             },
             "runtime": "proxmox",
-            // The kernel and agent environments boot, as the release ISO
-            // holds them: the agent is this initramfs's init.
-            "vm": {"kernel": "/release/vmlinuz", "agent": "/init"},
+            // Environments boot the release ISO this VM booted (worker_vm),
+            // whose agent is this initramfs's init.
+            "vm": {"agent": "/init"},
             "hub": {
                 "listen": format!("0.0.0.0:{HUB_PORT}"),
                 "address": format!("{address}:{HUB_PORT}"),
@@ -307,6 +395,7 @@ mod role {
                 "prefix": p.prefix,
                 "mke2fs": "/mke2fs",
                 "release_iso": p.release_iso,
+                "worker_vm": true,
             },
         });
         write_private(
@@ -328,14 +417,15 @@ mod role {
         std::fs::rename(&tmp, path)
     }
 
-    /// Starts the worker from the release ISO, its output on the console.
-    fn start() -> io::Result<i32> {
-        let child = std::process::Command::new(Path::new(RELEASE).join("hangar-worker"))
+    /// Starts the worker of the release in dir, its output on the console.
+    fn start(dir: &str) -> io::Result<i32> {
+        let dir = Path::new(dir);
+        let child = std::process::Command::new(dir.join("hangar-worker"))
             .args(["-config", CONFIG])
             .env_clear()
-            .env("PATH", "/release")
+            .env("PATH", dir)
             .env("HOME", DATA)
-            .env("SSL_CERT_FILE", "/release/ca-certificates.crt")
+            .env("SSL_CERT_FILE", dir.join("ca-certificates.crt"))
             .current_dir(DATA)
             .spawn()?;
         let pid = child.id() as i32;
@@ -361,7 +451,8 @@ mod role {
         }
     }
 
-    static EXITED: std::sync::OnceLock<watch::Sender<u64>> = std::sync::OnceLock::new();
+    /// Counts the worker's exits, with the last's wait status.
+    static EXITED: std::sync::OnceLock<watch::Sender<(u64, i32)>> = std::sync::OnceLock::new();
 
     /// Reaps every child that exits, as PID 1 must, and says when the
     /// worker has.
@@ -380,7 +471,10 @@ mod role {
             {
                 eprintln!("hangar-agent: worker VM: the worker (pid {pid}) exited ({status:#x})");
                 if let Some(tx) = EXITED.get() {
-                    tx.send_modify(|n| *n += 1);
+                    tx.send_modify(|(n, st)| {
+                        *n += 1;
+                        *st = status;
+                    });
                 }
             }
         }

@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use hangar_api::{
     DesiredState, EnvironmentSpec, GpuInfo, ImageCopy, LocalImage, ObservedEnvironment,
-    REGISTRY_PATH, Resources, STREAM_UNKNOWN_KIND, STREAM_UNREACHABLE, Spec, StreamAnswer,
+    REGISTRY_PATH, Release, Resources, STREAM_UNKNOWN_KIND, STREAM_UNREACHABLE, Spec, StreamAnswer,
     WorkerStatus, feature,
 };
 use hangar_images::HangarRegistry;
@@ -82,6 +82,10 @@ pub trait Runtime: Clone + Send + Sync + 'static {
     fn remove_image(&self, _copy: &ImageCopy) {}
     /// Says where Hangar's own registry is, if it has one.
     fn use_registry(&self, _hangar: Option<HangarRegistry>) {}
+
+    /// Moves the worker to the release the server names, where it changes
+    /// its own.
+    fn follow_release(&self, _release: &Release) {}
     /// What its virtual GPUs render with.
     fn gpu(&self) -> Option<GpuInfo> {
         None
@@ -242,6 +246,9 @@ impl<R: Runtime> Worker<R> {
                 }));
             for c in &set.remove_images {
                 self.rt.remove_image(c);
+            }
+            if let Some(r) = &set.release {
+                self.rt.follow_release(r);
             }
         }
     }

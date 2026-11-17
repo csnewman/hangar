@@ -549,7 +549,24 @@ pub struct DesiredSet {
     /// with the worker's own credential.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub registry: String,
+    /// The release the server's workers run where a worker changes its
+    /// own: a Proxmox place's worker VM, which boots it. None leaves each
+    /// worker on the release it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release: Option<Release>,
 }
+
+/// A release of Hangar's worker, as a worker VM boots it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Release {
+    /// The worker's build, as it reports it (`WorkerStatus::version`).
+    pub version: String,
+    /// The image holding its release ISO, as `/hangar-release.iso`.
+    pub iso_image: String,
+}
+
+/// The file in a release's image (`Release::iso_image`) that is its ISO.
+pub const RELEASE_ISO_FILE: &str = "hangar-release.iso";
 
 /// Where the server serves its registry to workers: the distribution API's
 /// /v2/ is beneath it.

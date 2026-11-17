@@ -75,9 +75,14 @@ pub struct Proxmox {
     /// image's (/usr/share/hangar/mke2fs).
     pub mke2fs: String,
     /// The release ISO environments boot, by its volume's ID
-    /// (STORAGE:iso/NAME), as one is published with each release and a
-    /// worker VM boots; unset, the worker builds its own.
+    /// (STORAGE:iso/NAME), as one is published with each release; unset,
+    /// the worker VM's own with worker_vm, else the worker builds its own.
     pub release_iso: String,
+    /// The worker runs in the place's worker VM (one of its VMs, in its
+    /// pool with its prefix's tag, found by its SMBIOS UUID): environments
+    /// boot the release ISO it booted, and it moves itself to the release
+    /// the server names.
+    pub worker_vm: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

@@ -332,6 +332,95 @@ impl Client {
         unpack(&tick, layers, true);
         Ok(())
     }
+
+    /// Fetches one regular file of the image r names at digest into out,
+    /// as the image's tree has it: read from the topmost layer holding it,
+    /// and not there if a layer above deletes it or its directory. Layers
+    /// are fetched into scratch from the top down, each checked against
+    /// its digest, until the file is found; the caller removes scratch.
+    pub fn fetch_file(
+        &self,
+        r: &Reference,
+        digest: &str,
+        path: &str,
+        scratch: &Path,
+        out: &Path,
+    ) -> io::Result<()> {
+        let pinned = r.at(digest);
+        let mut repo = self.repo(&pinned)?;
+        fs::create_dir_all(scratch)?;
+        let mut body = repo.manifest(digest)?;
+        let value: serde_json::Value = serde_json::from_slice(&body)
+            .map_err(|e| other(format!("{pinned}: its manifest: {e}")))?;
+        if value.get("manifests").is_some() {
+            let index: Vec<Descriptor> = serde_json::from_value(value["manifests"].clone())
+                .map_err(|e| other(format!("{pinned}: its index: {e}")))?;
+            let chosen = pick_platform(&index).ok_or_else(|| {
+                other(format!("{pinned} has no image for linux/{}", guest_arch()))
+            })?;
+            body = repo.manifest(&chosen.digest)?;
+        }
+        let manifest: Manifest = serde_json::from_slice(&body)
+            .map_err(|e| other(format!("{pinned}: its manifest: {e}")))?;
+        let want = path.trim_matches('/');
+        let gone = || {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{pinned} has no file {want}"),
+            )
+        };
+        for layer in manifest.layers.iter().rev() {
+            let blob = scratch.join(blob_file(&layer.digest)?);
+            repo.blob(layer, &blob, &mut |_| {})
+                .map_err(|e| other(format!("fetching {pinned}: {e}")))?;
+            let Some(tar) = decompress(BufReader::new(File::open(&blob)?), &layer.media_type)?
+            else {
+                continue;
+            };
+            let mut hidden = false;
+            let mut archive = tar::Archive::new(tar);
+            for e in archive.entries()? {
+                let mut e = e?;
+                let raw = e.path_bytes();
+                let name = String::from_utf8_lossy(&raw);
+                let name = name.trim_start_matches("./").trim_matches('/');
+                if name == want && e.header().entry_type().is_file() {
+                    let tmp = out.with_extension("part");
+                    let mut f = File::create(&tmp)?;
+                    io::copy(&mut e, &mut f)?;
+                    f.sync_all()?;
+                    return fs::rename(&tmp, out);
+                }
+                hidden |= deletes(name, want);
+            }
+            if hidden {
+                return Err(gone());
+            }
+        }
+        Err(gone())
+    }
+}
+
+/// Whether a layer's entry named name deletes the file want of the layers
+/// below: its whiteout, or an opaque directory holding it.
+fn deletes(name: &str, want: &str) -> bool {
+    let (dir, base) = match name.rsplit_once('/') {
+        Some((d, b)) => (d, b),
+        None => ("", name),
+    };
+    let Some(target) = base.strip_prefix(".wh.") else {
+        return false;
+    };
+    let under = |d: &str| d.is_empty() || want.starts_with(&format!("{d}/"));
+    if target == ".wh..opq" {
+        return under(dir);
+    }
+    let deleted = if dir.is_empty() {
+        target.to_string()
+    } else {
+        format!("{dir}/{target}")
+    };
+    want == deleted || want.starts_with(&format!("{deleted}/"))
 }
 
 /// This platform's manifest in an index: linux, this machine's

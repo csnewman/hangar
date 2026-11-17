@@ -142,6 +142,7 @@ async fn run(path: PathBuf, rings: Arc<Rings>) -> Result<(), String> {
                     p.mke2fs.clone().into()
                 },
                 release_iso: p.release_iso.clone(),
+                worker_vm: p.worker_vm,
             },
             &dir,
             log.clone(),

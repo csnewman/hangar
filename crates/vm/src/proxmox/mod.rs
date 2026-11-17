@@ -9,11 +9,14 @@
 //! mounts as the root's base. An environment's VM is made with the two as
 //! CD-ROMs, an empty writable disk (its filesystem made by the agent at its
 //! first boot) and a swap disk; each cold start points it at the current
-//! release, so it boots the worker's own kernel and agent. Each boot, the
-//! VM's SMBIOS serial says where the worker's hub is, and the hub's secret
-//! for the boot is written into the guest through its agent channel
-//! (`hangar-agent`'s qga), never into the VM's configuration, which anyone
-//! who may see the VM can read.
+//! release, so it boots the worker's own kernel and agent. Each boot, where
+//! the worker's hub is and the secret for the boot are written into the
+//! guest through its agent channel (`hangar-agent`'s qga), never into the
+//! VM's configuration, which anyone who may see the VM can read.
+//!
+//! A worker in a worker VM of the place's (`Config::worker_vm`) boots
+//! environments from the release ISO it booted itself, and upgrades itself
+//! to the release its server names (`release.rs`).
 //!
 //! Places may share a Proxmox. Everything the worker makes is named with its
 //! place's prefix, its VMs carry the prefix as a tag, and the worker removes
@@ -31,6 +34,7 @@ use crate::log::Log;
 
 pub mod client;
 pub mod console;
+mod release;
 
 use client::{Client, enc};
 
@@ -90,9 +94,14 @@ pub struct Config {
     /// agent to make a new writable disk's filesystem with.
     pub mke2fs: PathBuf,
     /// The release ISO environments boot, by its volume's ID, as one is
-    /// published with each release; empty, the worker builds and uploads
-    /// its own (release).
+    /// published with each release; empty, the worker VM's own if
+    /// worker_vm, else the worker builds and uploads its own (release).
     pub release_iso: String,
+    /// The worker runs in the place's worker VM: one of its VMs (in its
+    /// pool, with its prefix's tag), on its node, found by its SMBIOS UUID.
+    /// Environments boot the release ISO it booted, and it follows the
+    /// release its server names (`Pve::follow`).
+    pub worker_vm: bool,
 }
 
 /// Whether prefix can name a place's things on Proxmox: 1 to 20 lowercase
@@ -169,10 +178,16 @@ pub struct Pve {
     seen: std::sync::Mutex<HashMap<String, Instant>>,
     /// One upload of a file at a time.
     uploading: tokio::sync::Mutex<()>,
+    /// The worker VM's VMID, once found.
+    own: tokio::sync::OnceCell<u32>,
+    /// Following a release: one at a time, the last tried and when, and
+    /// whether a release that did not come up has been said.
+    following: tokio::sync::Mutex<Option<(String, Instant)>>,
+    said_stuck: std::sync::atomic::AtomicBool,
     log: Log,
 }
 
-/// What a VM's agent needs besides its secret, in its SMBIOS serial.
+/// What a VM's agent needs to dial the hub, besides its secret.
 pub type Placed = hangar_hub::Settings;
 
 impl Pve {
@@ -187,6 +202,9 @@ impl Pve {
             release: Default::default(),
             seen: Default::default(),
             uploading: Default::default(),
+            own: Default::default(),
+            following: Default::default(),
+            said_stuck: Default::default(),
             log,
         })
     }
@@ -251,15 +269,28 @@ impl Pve {
             .ok_or_else(|| err(format!("proxmox gave no free VMID: {v}")))
     }
 
+    /// Whether environments boot a release ISO the worker is given (its
+    /// worker VM's, or one configured), not one it makes of its kernel.
+    pub fn given_release(&self) -> bool {
+        self.cfg.worker_vm || !self.cfg.release_iso.is_empty()
+    }
+
     /// The release ISO, which VMs boot: the one configured (release_iso),
-    /// or the worker's kernel, and its agent as the initramfs with mke2fs
-    /// beside it, booting with CMDLINE, made and uploaded once per kernel,
-    /// agent and mke2fs. Its volume's ID.
+    /// the worker VM's own, or the worker's kernel, and its agent as the
+    /// initramfs with mke2fs beside it, booting with CMDLINE, made and
+    /// uploaded once per kernel, agent and mke2fs. Its volume's ID.
     pub async fn release(&self, kernel: &Path, agent: &Path) -> io::Result<String> {
-        if !self.cfg.release_iso.is_empty() {
-            let name = self.cfg.release_iso.rsplit('/').next().unwrap_or_default();
+        let given = if !self.cfg.release_iso.is_empty() {
+            Some(self.cfg.release_iso.clone())
+        } else if self.cfg.worker_vm {
+            Some(self.own_release().await?)
+        } else {
+            None
+        };
+        if let Some(volid) = given {
+            let name = volid.rsplit('/').next().unwrap_or_default();
             *self.release.lock().unwrap() = Some(name.to_string());
-            return Ok(self.cfg.release_iso.clone());
+            return Ok(volid);
         }
         let key = short_hash(&format!(
             "{}{}{}{CMDLINE}",
