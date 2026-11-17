@@ -149,6 +149,9 @@ async fn run(path: PathBuf, rings: Arc<Rings>) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
         rtcfg.proxmox = Some(Arc::new(pve));
     }
+    // A Proxmox VM runs on without its worker, which takes it back when it
+    // starts again.
+    let leaves_running = cfg.runtime == "proxmox";
     let machines = hangar_vm::runtime::Runtime::new(rtcfg)
         .await
         .map_err(|e| e.to_string())?;
@@ -159,7 +162,14 @@ async fn run(path: PathBuf, rings: Arc<Rings>) -> Result<(), String> {
         r = w.run() => r.map_err(|e| e.to_string()),
         _ = stopped() => Ok(()),
     };
-    log.info("stopping environments", &[]);
+    log.info(
+        if leaves_running {
+            "leaving environments' VMs running"
+        } else {
+            "stopping environments"
+        },
+        &[],
+    );
     if let Err(e) = machines.shutdown(Duration::from_secs(120)).await {
         log.warn("environments did not all stop", &[("err", &e)]);
     }

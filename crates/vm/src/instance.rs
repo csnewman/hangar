@@ -901,19 +901,14 @@ impl Instance {
 impl Instance {
     /// Boots the machine as a Proxmox VM (`crate::proxmox`): its VM made
     /// the first time, with its image's ISO and the release ISO of the
-    /// worker's kernel and agent (each uploaded once), sized, started with
-    /// its SMBIOS serial saying where the hub is, given its secret through
-    /// its agent channel, and connected once its agent dials the hub. A VM
-    /// hibernated is resumed by its start, keeping the secret it booted
-    /// with.
+    /// worker's kernel and agent (each uploaded once), sized, started, given
+    /// its hub settings and secret through its agent channel, and connected
+    /// once its agent dials the hub. A VM hibernated is resumed by its
+    /// start, keeping the secret it booted with.
     async fn boot_proxmox(
         cfg: InstanceConfig,
         pve: Arc<crate::proxmox::Pve>,
     ) -> io::Result<Instance> {
-        let hub = cfg
-            .hub
-            .clone()
-            .ok_or_else(|| err("a Proxmox VM has no vsock: the worker needs the hub"))?;
         let vm_file = cfg.dir.join(PROXMOX_VM_FILE);
         let mut id = std::fs::read_to_string(&vm_file)
             .ok()
@@ -961,6 +956,16 @@ impl Instance {
         // ISOs this boot supersedes go while it boots.
         let p = pve.clone();
         tokio::spawn(async move { p.sweep().await });
+        // A VM still running here is one a worker started and never set
+        // up, nor recorded as running (`PROXMOX_RUNNING_FILE`): it boots
+        // again.
+        if !resuming && pve.running(id).await? {
+            cfg.log.warn(
+                "the environment's VM was left running unrecorded; stopping it",
+                &[("vmid", &id)],
+            );
+            pve.stop(id).await?;
+        }
         if !resuming {
             pve.size(id, cfg.memory_mib, cfg.cpus).await?;
         }
@@ -969,7 +974,55 @@ impl Instance {
         } else {
             None
         };
-        let reg = hub.register(&cfg.id, kept);
+        let how = Join::Start {
+            image,
+            release,
+            resuming,
+        };
+        Instance::join_proxmox(cfg, pve, id, kept, how, agent_booted).await
+    }
+
+    /// Takes back a Proxmox VM a worker left running (`LeftRunning`): its
+    /// agent is given the hub's settings again, with the secret it booted
+    /// with, and dials in. None if its VM is not running.
+    pub async fn adopt(cfg: InstanceConfig, left: &LeftRunning) -> io::Result<Option<Instance>> {
+        let pve = cfg
+            .proxmox
+            .clone()
+            .ok_or_else(|| err("only a Proxmox VM runs on without its worker"))?;
+        let Some(id) = std::fs::read_to_string(cfg.dir.join(PROXMOX_VM_FILE))
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+        else {
+            return Ok(None);
+        };
+        if !pve.running(id).await? {
+            return Ok(None);
+        }
+        let secret = crate::hub::saved_secret(&cfg.dir)
+            .ok_or_else(|| err("the secret the VM booted with is not kept"))?;
+        let agent = left.agent.clone();
+        Instance::join_proxmox(cfg, pve, id, Some(secret), Join::Rejoin, agent)
+            .await
+            .map(Some)
+    }
+
+    /// What starting and taking back a Proxmox VM share: its place on the
+    /// hub, the sockets its agent's streams reach, its console followed,
+    /// its settings given, and its agent waited for.
+    async fn join_proxmox(
+        cfg: InstanceConfig,
+        pve: Arc<crate::proxmox::Pve>,
+        id: u32,
+        secret: Option<String>,
+        how: Join,
+        agent_booted: String,
+    ) -> io::Result<Instance> {
+        let hub = cfg
+            .hub
+            .clone()
+            .ok_or_else(|| err("a Proxmox VM has no vsock: the worker needs the hub"))?;
+        let reg = hub.register(&cfg.id, secret);
         crate::hub::save_secret(&cfg.dir, reg.secret())?;
         let dir = krun_dir(&cfg.id)?;
         let base = dir.join("v");
@@ -983,23 +1036,32 @@ impl Instance {
             parts.files = Some(SharedFiles::serve(&base, GUEST_CID, root, view.clone())?);
         }
         reg.set_base(&base);
-        cfg.progress(if resuming {
-            "resuming its VM"
-        } else {
-            "starting its VM"
+        let resuming = matches!(how, Join::Start { resuming: true, .. });
+        let rejoining = matches!(how, Join::Rejoin);
+        cfg.progress(match how {
+            Join::Rejoin => "reconnecting to its VM",
+            Join::Start { resuming: true, .. } => "resuming its VM",
+            Join::Start { .. } => "starting its VM",
         });
         let exit = Arc::new(Mutex::new(Exit::default()));
-        let console = crate::proxmox::console::follow(pve.clone(), id, cfg.console_file.clone());
-        let started = pve
-            .start(id, &reg.settings(), reg.secret(), &image, &release)
-            .await;
+        let console =
+            crate::proxmox::console::follow(pve.clone(), id, cfg.console_file.clone(), !rejoining);
+        let given = match &how {
+            Join::Start { image, release, .. } => {
+                pve.start(id, &reg.settings(), reg.secret(), image, release)
+                    .await
+            }
+            Join::Rejoin => pve.rejoin(id, &reg.settings(), reg.secret()).await,
+        };
         parts.process = Some(watch_vm(pve.clone(), id, &exit));
-        let session = match started {
+        let session = match given {
             Ok(()) => await_agent(&cfg, &parts, &exit).await,
             Err(e) => Err(e),
         };
         let session = match session {
             Ok(s) => s,
+            // A VM not taken back is stopped as one not started is: its
+            // disks are kept for the next start.
             Err(e) => {
                 parts.close().await;
                 return Err(e);
@@ -1013,6 +1075,7 @@ impl Instance {
                 ("kernel", &session.hello.kernel),
                 ("up_seconds", &(session.hello.boot_micros as f64 / 1e6)),
                 ("resumed", &resuming),
+                ("rejoined", &rejoining),
             ],
         );
         if let Err(e) = session
@@ -1052,6 +1115,66 @@ impl Instance {
         })
     }
 
+    /// Lets go of a Proxmox VM and leaves it running, for the worker that
+    /// takes it back (`LeftRunning`). Its link to the hub closes, and its
+    /// agent dials until a hub answers.
+    pub async fn leave_running(&self) -> io::Result<()> {
+        if self.monitor != Monitor::Proxmox {
+            return Err(err("only a Proxmox VM runs on without its worker"));
+        }
+        let mut closed = self.closed.lock().await;
+        if *closed {
+            return Ok(());
+        }
+        *closed = true;
+        self.process.stopping.store(true, Ordering::SeqCst);
+        if let Some(h) = &self.hub {
+            h.end();
+        }
+        if let Some(f) = &self.files {
+            f.close();
+        }
+        if let Some(d) = &self.krun_dir {
+            let _ = std::fs::remove_dir_all(d);
+        }
+        Ok(())
+    }
+
+    /// Records that the machine is running set up, for a worker that starts
+    /// while it runs on (`PROXMOX_RUNNING_FILE`): the guest's boot ID,
+    /// which says whether it has booted again since, and the agent it
+    /// booted with.
+    pub async fn mark_running(&self) -> io::Result<()> {
+        if self.monitor != Monitor::Proxmox {
+            return Ok(());
+        }
+        let left = LeftRunning {
+            boot_id: self.boot_id().await?,
+            agent: self.agent_booted.clone(),
+        };
+        let b = serde_json::to_vec(&left).map_err(io::Error::other)?;
+        let path = self.cfg.dir.join(PROXMOX_RUNNING_FILE);
+        let tmp = path.with_extension("new");
+        std::fs::write(&tmp, b)?;
+        std::fs::rename(&tmp, &path)
+    }
+
+    /// The guest kernel's boot ID.
+    pub async fn boot_id(&self) -> io::Result<String> {
+        let r = self
+            .session
+            .exec(
+                Duration::from_secs(10),
+                &["cat", "/proc/sys/kernel/random/boot_id"],
+            )
+            .await?;
+        let id = r.stdout.trim().to_string();
+        if r.code != 0 || id.is_empty() {
+            return Err(err(format!("reading the guest's boot ID: {}", r.stderr)));
+        }
+        Ok(id)
+    }
+
     /// The machine's VMID, under Proxmox.
     pub fn vmid(&self) -> Option<u32> {
         self.vm
@@ -1060,6 +1183,43 @@ impl Instance {
 
 /// Where a Proxmox machine's VMID is kept, in its directory.
 pub const PROXMOX_VM_FILE: &str = "proxmox-vm";
+
+/// There, in a Proxmox machine's directory, while its VM runs set up: a
+/// worker that stops leaves such a VM running, and its next start takes it
+/// back rather than booting it.
+pub const PROXMOX_RUNNING_FILE: &str = "proxmox-running";
+
+/// What a Proxmox VM left running booted, as `PROXMOX_RUNNING_FILE` holds.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LeftRunning {
+    /// The guest's boot ID then: another says it has booted again since,
+    /// and so is set up afresh.
+    pub boot_id: String,
+    /// The agent it booted with (`suspend::fingerprint`).
+    pub agent: String,
+}
+
+/// What a worker left running in dir, if anything.
+pub fn left_running(dir: &Path) -> Option<LeftRunning> {
+    let b = std::fs::read(dir.join(PROXMOX_RUNNING_FILE)).ok()?;
+    serde_json::from_slice(&b).ok()
+}
+
+/// Says the machine in dir is not running set up.
+pub fn clear_running(dir: &Path) {
+    let _ = std::fs::remove_file(dir.join(PROXMOX_RUNNING_FILE));
+}
+
+/// How a Proxmox VM is joined: started, cold or from a hibernate, with the
+/// ISOs a cold start points it at; or taken back as it runs.
+enum Join {
+    Start {
+        image: String,
+        release: String,
+        resuming: bool,
+    },
+    Rejoin,
+}
 
 /// Watches a Proxmox VM as a monitor's process is watched: it has exited
 /// once Proxmox says the VM is stopped, which is a failure unless the

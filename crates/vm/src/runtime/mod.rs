@@ -87,6 +87,9 @@ const HUGE_PAGE_WARN_EVERY: Duration = Duration::from_secs(15 * 60);
 /// An environment's pinned copy, in its directory.
 const IMAGE_PIN_FILE: &str = "image.json";
 
+/// The reason a Proxmox VM left running shows while it is taken back.
+const REJOINING: &str = "reconnecting to its VM";
+
 /// What the runtime needs from the worker's configuration.
 #[derive(Clone, Default)]
 pub struct Config {
@@ -210,7 +213,8 @@ impl Runtime {
     /// Environments with a directory left in the state directory by an
     /// earlier run are reported as stopped, or suspended: their machines
     /// went with the process that ran them, and their disks are still there
-    /// for the next start.
+    /// for the next start. A Proxmox VM left running is reported as
+    /// starting, and taken back once the server says what it wants of it.
     pub async fn new(mut cfg: Config) -> io::Result<Arc<Runtime>> {
         cfg.defaults();
         preflight(&cfg)?;
@@ -303,13 +307,20 @@ impl Runtime {
         for e in std::fs::read_dir(&rt.cfg.state_dir)?.flatten() {
             if e.file_type().is_ok_and(|t| t.is_dir()) {
                 let id = e.file_name().to_string_lossy().into_owned();
+                let left = rt.monitor == Monitor::Proxmox
+                    && crate::instance::left_running(&e.path()).is_some();
                 let phase = if e.path().join(SUSPENDED_MARK).exists() {
                     Phase::Suspended
+                } else if left {
+                    Phase::Starting
                 } else {
                     Phase::Stopped
                 };
                 let mut st = rt.state.lock().unwrap();
-                rt.new_machine(&mut st, &id, phase);
+                let m = rt.new_machine(&mut st, &id, phase);
+                if phase == Phase::Starting {
+                    m.st.lock().unwrap().reason = REJOINING.into();
+                }
             }
         }
         rt.spawn(watch_images(Arc::downgrade(&rt), rt.stop.subscribe()));
@@ -458,9 +469,18 @@ impl Runtime {
     ///
     /// A worker that is stopping takes its machines with it: nothing would
     /// be left to supervise them, answer their agents, or notice them exit.
-    /// Their disks are kept, so they start again where they left off.
+    /// Their disks are kept, so they start again where they left off. A
+    /// Proxmox VM running set up is the exception: it runs on without the
+    /// worker, as the node's, and the worker's next start takes it back.
     pub async fn shutdown(&self, timeout: Duration) -> io::Result<()> {
         let _ = self.stop.send(true);
+        // A start under way is called off, and what it started stopped: a
+        // machine not yet set up has nothing to keep.
+        for m in self.state.lock().unwrap().envs.values() {
+            if let Some(c) = &m.st.lock().unwrap().cancel_boot {
+                let _ = c.send(true);
+            }
+        }
         let tasks: Vec<_> = std::mem::take(&mut *self.tasks.lock().unwrap());
         let all = async {
             for t in tasks {
@@ -1177,7 +1197,7 @@ impl Machine {
             let running = self.st.lock().unwrap().running.clone();
             tokio::select! {
                 _ = set(&mut stop) => {
-                    self.power_off().await;
+                    self.leave().await;
                     return;
                 }
                 _ = self.nudge.notified() => {}
@@ -1186,15 +1206,18 @@ impl Machine {
                     continue;
                 }
             }
-            let (spec, running, failed) = {
-                let st = self.st.lock().unwrap();
-                (
-                    st.spec.clone(),
-                    st.running.is_some(),
-                    st.phase == Phase::Failed,
-                )
+            let Some(spec) = self.st.lock().unwrap().spec.clone() else {
+                continue;
             };
-            let Some(spec) = spec else { continue };
+            // Whatever is wanted of a VM a worker left running, it is taken
+            // back first, so what is done with it is done cleanly.
+            if running.is_none() && crate::instance::left_running(&self.dir).is_some() {
+                self.adopt(&spec).await;
+            }
+            let (running, failed) = {
+                let st = self.st.lock().unwrap();
+                (st.running.is_some(), st.phase == Phase::Failed)
+            };
             if spec.desired != DesiredState::Deleted {
                 self.drop_rollback(&spec).await;
             }
@@ -1286,6 +1309,115 @@ impl Machine {
             let mut st = self.st.lock().unwrap();
             st.running = Some(inst.clone());
             st.memory_asked = spec.spec.memory_mib;
+        }
+        if let Err(e) = inst.mark_running().await {
+            self.log.warn(
+                "could not record the VM as running; the worker's next start stops it",
+                &[("err", &e)],
+            );
+        }
+        self.set(Phase::Running, "");
+        let m = self.clone();
+        let cpus = spec.spec.cpus.max(0) as u32;
+        tokio::spawn(async move { m.sample(inst, cpus).await });
+    }
+
+    /// Takes back the environment's VM, which a worker left running
+    /// (`instance::left_running`), and carries on with it as that worker
+    /// would have. A guest that has booted again since is set up as at any
+    /// boot. A VM that has stopped is forgotten, and one that cannot be
+    /// taken back is stopped: either way the environment starts afresh
+    /// from its disks if it is wanted running.
+    async fn adopt(self: &Arc<Self>, spec: &EnvironmentSpec) {
+        let Some(left) = crate::instance::left_running(&self.dir) else {
+            return;
+        };
+        let Some(rt) = self.rt() else { return };
+        if rt.monitor != Monitor::Proxmox {
+            crate::instance::clear_running(&self.dir);
+            return;
+        }
+        self.set(Phase::Starting, REJOINING);
+        let files = rt.state.lock().unwrap().files.clone();
+        let me = self.clone();
+        let cfg = InstanceConfig {
+            id: self.id.clone(),
+            name: spec.name.clone(),
+            monitor: rt.monitor.name().into(),
+            dir: self.dir.clone(),
+            kernel: rt.cfg.kernel.clone(),
+            agent: rt.cfg.agent.clone(),
+            memory_mib: spec.spec.memory_mib.max(0) as u32,
+            cpus: spec.spec.cpus.max(0) as u32,
+            console_file: self.dir.join("console.log"),
+            agent_wait: rt.cfg.boot_timeout,
+            progress: Some(Arc::new(move |step: &str| me.step_to(Step::Boot, step))),
+            log: self.log.clone(),
+            shared_files: files.map(|(root, view)| (root, view(&self.id))),
+            hub: rt.cfg.hub.clone(),
+            proxmox: rt.cfg.proxmox.clone(),
+            ..Default::default()
+        };
+        drop(rt);
+        let inst = match Instance::adopt(cfg, &left).await {
+            Ok(Some(i)) => Arc::new(i),
+            Ok(None) => {
+                crate::instance::clear_running(&self.dir);
+                let phase = if suspend::suspended(&self.dir).is_some() {
+                    Phase::Suspended
+                } else {
+                    Phase::Stopped
+                };
+                self.set(phase, "");
+                return;
+            }
+            Err(e) => {
+                self.log.warn(
+                    "could not take back the VM left running; it is stopped",
+                    &[("err", &e)],
+                );
+                crate::instance::clear_running(&self.dir);
+                self.set(Phase::Stopped, "");
+                return;
+            }
+        };
+        let same = inst.boot_id().await.is_ok_and(|b| b == left.boot_id);
+        if same {
+            if let Err(e) = provision::write_reclaim(inst.session(), spec.spec.memory_reclaim).await
+            {
+                self.log.warn(
+                    "could not tell the guest whether to reclaim idle memory",
+                    &[("err", &e)],
+                );
+            }
+            self.st.lock().unwrap().reclaim_asked = spec.spec.memory_reclaim;
+        } else {
+            self.log
+                .info("the guest booted again while the worker was away", &[]);
+            let (tx, cancel) = watch::channel(false);
+            self.st.lock().unwrap().cancel_boot = Some(tx);
+            let set_up = self.set_up(&inst, spec, cancel).await;
+            self.st.lock().unwrap().cancel_boot = None;
+            if let Err(e) = set_up {
+                crate::instance::clear_running(&self.dir);
+                inst.shutdown().await;
+                match e {
+                    Stop::Cancelled => self.set(Phase::Stopped, ""),
+                    Stop::Failed(e) => self.set(Phase::Failed, &e.to_string()),
+                }
+                return;
+            }
+        }
+        {
+            let mut st = self.st.lock().unwrap();
+            st.running = Some(inst.clone());
+            // Fitted to what its spec asks, which may have changed while
+            // the worker was away.
+            st.memory_asked = -1;
+        }
+        if let Err(e) = inst.mark_running().await {
+            self.log
+                .warn("could not record the VM as running", &[("err", &e)]);
         }
         self.set(Phase::Running, "");
         let m = self.clone();
@@ -1710,6 +1842,7 @@ impl Machine {
         let Some(inst) = self.st.lock().unwrap().running.take() else {
             return;
         };
+        crate::instance::clear_running(&self.dir);
         if inst.rebooted() {
             inst.close().await;
             if inst.panicked() {
@@ -1754,9 +1887,34 @@ impl Machine {
 
     async fn power_off(&self) {
         let inst = self.st.lock().unwrap().running.take();
+        crate::instance::clear_running(&self.dir);
         if let Some(inst) = inst {
             inst.shutdown().await;
         }
+    }
+
+    /// What a worker that is stopping does with the machine: a Proxmox VM
+    /// running set up runs on, for the worker's next start to take back;
+    /// any other is powered off, as nothing would be left to supervise it.
+    async fn leave(&self) {
+        let inst = self.st.lock().unwrap().running.clone();
+        if let Some(inst) = inst
+            && inst.monitor() == Monitor::Proxmox
+            && crate::instance::left_running(&self.dir).is_some()
+        {
+            match inst.leave_running().await {
+                Ok(()) => {
+                    self.st.lock().unwrap().running = None;
+                    self.log.info("leaving its VM running", &[]);
+                    return;
+                }
+                Err(e) => self.log.warn(
+                    "could not leave the VM running; powering it off",
+                    &[("err", &e)],
+                ),
+            }
+        }
+        self.power_off().await;
     }
 
     /// Writes the running machine to disk and stops it. If it cannot, the
@@ -1771,6 +1929,7 @@ impl Machine {
         let start = Instant::now();
         match tokio::time::timeout(Duration::from_secs(600), inst.suspend()).await {
             Ok(Ok(())) => {
+                crate::instance::clear_running(&self.dir);
                 self.log
                     .info("suspended", &[("seconds", &start.elapsed().as_secs_f64())]);
                 Ok(())

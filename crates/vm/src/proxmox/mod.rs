@@ -603,6 +603,16 @@ impl Pve {
         self.give_settings(id, &settings).await
     }
 
+    /// Gives a running VM's agent the hub's settings again, with the secret
+    /// it booted with, as for a worker taking back a VM another left
+    /// running: the agent dials the hub they name at once.
+    pub async fn rejoin(&self, id: u32, placed: &Placed, secret: &str) -> io::Result<()> {
+        let mut placed = placed.clone();
+        placed.secret = secret.to_string();
+        let settings = serde_json::to_string(&placed).map_err(io::Error::other)?;
+        self.give_settings(id, &settings).await
+    }
+
     /// Writes the hub's settings into the guest once its agent answers on
     /// the agent channel.
     async fn give_settings(&self, id: u32, settings: &str) -> io::Result<()> {

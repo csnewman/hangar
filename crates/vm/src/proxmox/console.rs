@@ -22,13 +22,15 @@ const ATTACH_WITHIN: Duration = Duration::from_secs(120);
 /// own page does.
 const PING_EVERY: Duration = Duration::from_secs(30);
 
-/// Follows a VM's serial console into a new file at out until the VM
-/// stops, or the task is aborted. It starts before the VM does, attaching
-/// as soon as Proxmox lets it, so the log has the guest's first lines.
-pub fn follow(pve: Arc<Pve>, id: u32, out: PathBuf) -> Following {
+/// Follows a VM's serial console into the file at out until the VM stops,
+/// or the task is aborted: a new file if fresh, as for a start, else added
+/// to, as for a VM taken back as it runs. It starts before the VM does,
+/// attaching as soon as Proxmox lets it, so the log has the guest's first
+/// lines.
+pub fn follow(pve: Arc<Pve>, id: u32, out: PathBuf, fresh: bool) -> Following {
     Following(tokio::spawn(async move {
         let log = pve.log.clone();
-        if let Err(e) = run(&pve, id, &out).await {
+        if let Err(e) = run(&pve, id, &out, fresh).await {
             log.debug("following the VM's console", &[("vmid", &id), ("err", &e)]);
         }
     }))
@@ -43,14 +45,20 @@ impl Drop for Following {
     }
 }
 
-async fn run(pve: &Pve, id: u32, out: &PathBuf) -> io::Result<()> {
+async fn run(pve: &Pve, id: u32, out: &PathBuf, fresh: bool) -> io::Result<()> {
     // A new file, as each start's console log is, so a reader following
     // the last knows this is another.
-    match tokio::fs::remove_file(out).await {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
-        _ => {}
+    if fresh {
+        match tokio::fs::remove_file(out).await {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
     }
-    let mut file = tokio::fs::File::create(out).await?;
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(out)
+        .await?;
     let deadline = tokio::time::Instant::now() + ATTACH_WITHIN;
     let mut attached = false;
     loop {
