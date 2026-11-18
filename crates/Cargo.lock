@@ -3956,6 +3956,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-stream",
+ "tokio-tungstenite 0.26.2",
  "tokio-util",
  "tower-service",
  "url",

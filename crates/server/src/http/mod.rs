@@ -48,9 +48,8 @@ pub struct App {
     /// them; none when its key could not be had.
     pub place: Option<Arc<crate::link::Place>>,
     pub links_wake: Arc<tokio::sync::Notify>,
-    /// Changes to linked people's records here, which places waiting on
-    /// this one hear of.
-    pub link_changes: crate::link::Changes,
+    /// The connections to linked places this place holds.
+    pub link_conns: Arc<crate::linkconn::Conns>,
 }
 
 impl App {
@@ -67,7 +66,7 @@ impl App {
             blobs,
             place,
             links_wake: Arc::default(),
-            link_changes: Default::default(),
+            link_conns: Arc::default(),
             store,
             cfg,
             rules: access::Rules::from_specs(),

@@ -422,7 +422,9 @@ async fn places_link_and_reach_each_other() {
         let l = eventually(&format!("{who} to reach and be reached"), || async {
             let l = c.list_links().await.ok()?.into_inner();
             let link = l.items.into_iter().next()?;
-            (link.reached_at.is_some() && link.reach_error.is_none() && link.heard_at.is_some())
+            // One connection between them: reached by the side that
+            // dialled, heard from by the other.
+            ((link.reached_at.is_some() || link.heard_at.is_some()) && link.reach_error.is_none())
                 .then_some(link)
         })
         .await;

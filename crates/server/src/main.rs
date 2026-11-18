@@ -11,6 +11,7 @@ mod fail;
 mod http;
 mod keys;
 mod link;
+mod linkconn;
 mod linksync;
 mod listen;
 mod maintain;
@@ -125,7 +126,7 @@ async fn run() -> Result<(), String> {
         place.clone(),
     ));
     if let Some(place) = place {
-        tokio::spawn(link::run(app.clone(), place));
+        tokio::spawn(linkconn::run(app.clone(), place));
     }
     if let (Some(ssh), Some(key)) = (&app.cfg.ssh, host_key) {
         tokio::spawn(sshgw::serve(app.clone(), ssh.listen.clone(), key));

@@ -201,8 +201,8 @@ async fn packs_of_one_name_settle_the_same_in_both() {
 }
 
 /// A place that cannot reach the other is heard as soon as it changes all
-/// the same: the place that reaches it keeps a request waiting there, which
-/// it answers when its records change.
+/// the same: the place that reaches it holds a connection open, over which
+/// it sends its changes.
 #[tokio::test]
 async fn a_place_that_cannot_dial_out_is_heard_at_once() {
     let (Some(a), Some(b)) = (place().await, place().await) else {
@@ -260,7 +260,7 @@ async fn a_place_that_cannot_dial_out_is_heard_at_once() {
     );
     let b_link = b.client.list_links().await.expect("b's links").into_inner();
     assert!(
-        b_link.items[0].reach_error.is_some(),
-        "b cannot reach a itself"
+        b_link.items[0].reached_at.is_none() && b_link.items[0].heard_at.is_some(),
+        "b never reached a itself; a's connection is the one"
     );
 }
