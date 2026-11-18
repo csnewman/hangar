@@ -1219,10 +1219,14 @@ impl Shell {
     }
 
     fn title_bar(&self, cards: &[Card], p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        // A press on a tab is the tab's, to click or drag, not the title
+        // bar's to move the window by; one on the strip beside the tabs
+        // moves it.
         let tab = |id: SharedString, on: bool| {
             let hover = p.surface_2;
             h_flex()
                 .id(id)
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .h(px(28.))
                 .px(px(12.))
                 .gap(px(6.))
@@ -1251,10 +1255,9 @@ impl Shell {
             cx.notify();
         }
         let overflowing = self.tab_scroll.max_offset().x > px(0.);
-        // A press on a tab is the tab's, to click or drag, not the title
-        // bar's to move the window by.
         let mut tabs = h_flex()
             .id("tab-strip")
+            .debug_selector(|| "tab-strip".into())
             .h_full()
             .items_end()
             .gap(px(2.))
@@ -1266,7 +1269,6 @@ impl Shell {
             .min_w_0()
             .overflow_x_scroll()
             .track_scroll(&self.tab_scroll)
-            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 tab(
                     "tab-home".into(),

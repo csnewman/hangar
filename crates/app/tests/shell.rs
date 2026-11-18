@@ -171,3 +171,51 @@ fn an_index_follows_its_item() {
         [0, 2, 3, 1]
     );
 }
+
+/// The title bar beside the tabs moves the window when pressed and moved,
+/// as a title bar does; gpui's test window, which cannot move, says so by
+/// panicking when asked to.
+#[gpui::test]
+#[should_panic(expected = "not implemented")]
+fn the_strip_beside_the_tabs_moves_the_window(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    cx.update(gpui_component::init);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(places.clone(), window, cx));
+    cx.update(|window, cx| shell.update(cx, |s, cx| s.open("p", "e1", window, cx)));
+    cx.run_until_parked();
+    let strip = cx.debug_bounds("tab-strip").expect("the tab strip");
+    let tab = cx.debug_bounds("env-tab-0").expect("the tab");
+    assert!(strip.right() - tab.right() > px(40.), "room beside the tab");
+    let at = point(strip.right() - px(20.), strip.center().y);
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        at + point(px(8.), px(0.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+}
+
+/// A tab pressed and moved is the tab's, to drag among the others; the
+/// window stays where it is.
+#[gpui::test]
+fn a_tab_pressed_and_moved_leaves_the_window(cx: &mut TestAppContext) {
+    use gpui::{Modifiers, MouseButton, point, px};
+    cx.update(gpui_component::init);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(places.clone(), window, cx));
+    cx.update(|window, cx| shell.update(cx, |s, cx| s.open("p", "e1", window, cx)));
+    cx.run_until_parked();
+    let at = cx.debug_bounds("env-tab-0").expect("the tab").center();
+    cx.simulate_mouse_down(at, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(
+        at + point(px(8.), px(0.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_up(
+        at + point(px(8.), px(0.)),
+        MouseButton::Left,
+        Modifiers::none(),
+    );
+}
