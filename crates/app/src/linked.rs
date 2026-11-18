@@ -1,4 +1,4 @@
-//! Settings › Yours everywhere › Linked Places: each of the person's
+//! Settings › Sync › Linked Places: each of the person's
 //! places, where it stands among their linked places and which it reaches,
 //! and the Link Places sheet that links them. What is decided is
 //! `linking`'s; this reads the places and makes its calls.

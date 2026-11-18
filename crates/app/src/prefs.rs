@@ -449,7 +449,7 @@ impl Render for SettingsView {
                     .unwrap_or_default();
                 format!("{name} › {}", self.page.title())
             }
-            Page::Linked => format!("Yours everywhere › {}", self.page.title()),
+            Page::Linked => format!("Sync › {}", self.page.title()),
             page => format!("App › {}", page.title()),
         };
         let sheet = match self.page {
@@ -578,12 +578,7 @@ impl SettingsView {
             .collect();
         let mut groups: Vec<(String, String, Vec<Page>, Option<&'static str>)> = vec![
             ("app".into(), "App".into(), Page::APP.to_vec(), None),
-            (
-                "yours".into(),
-                "Yours everywhere".into(),
-                vec![Page::Linked],
-                None,
-            ),
+            ("sync".into(), "Sync".into(), vec![Page::Linked], None),
         ];
         for (id, name, signed_out, made) in places {
             let mut pages = vec![Page::Account(id.clone()), Page::Browser(id.clone())];
