@@ -523,4 +523,26 @@ pub struct Link {
     pub reach_error: String,
     /// When it last reached this place.
     pub heard_at: Option<DateTime<Utc>>,
+    /// When this place last exchanged records with it, or why it could
+    /// not.
+    #[serde(default)]
+    pub synced_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub sync_error: String,
+}
+
+/// `link_records`: what this place knows of one of a linked person's
+/// records.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkRecord {
+    pub user_id: Uuid,
+    pub kind: String,
+    pub record_id: String,
+    /// The time of its last change on the places' shared clock.
+    pub hlc: i64,
+    /// The place that made that change.
+    pub origin: Uuid,
+    /// The SHA-256 of its content, hex; empty when deleted.
+    pub digest: String,
+    pub deleted: bool,
 }

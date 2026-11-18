@@ -234,6 +234,8 @@ fn ago(at: chrono::DateTime<Utc>) -> String {
 fn state_cell(state: &State, p: &Palette) -> gpui::Div {
     let (tone, text) = match state {
         State::Linked => (Some(Tone::Good), "Linked".to_string()),
+        State::UpToDate => (Some(Tone::Good), "Up to date".to_string()),
+        State::Behind(_) => (Some(Tone::Busy), "Not up to date".to_string()),
         State::Waiting(_) => (Some(Tone::Busy), "Waiting".to_string()),
         State::NotLinked => (None, "Not linked".to_string()),
         State::NotAllowed => (None, "Not linked".to_string()),
@@ -399,7 +401,11 @@ impl LinkedView {
                 "{} reaches no linked place, and none reaches it. Its changes wait until one can.",
                 row.name
             )),
-            State::Linked => None,
+            State::Behind(e) => Some(format!(
+                "{}'s records could not be exchanged with a linked place: {e}",
+                row.name
+            )),
+            State::Linked | State::UpToDate => None,
         };
         if let Some(why) = why {
             d = d.child(div().child(why));
@@ -414,6 +420,11 @@ impl LinkedView {
                 .heard
                 .map(|at| format!(" · heard from {}", ago(at)))
                 .unwrap_or_default();
+            let synced = match (&l.sync_error, l.synced) {
+                (Some(e), _) => format!(" · records not exchanged: {e}"),
+                (None, Some(at)) => format!(" · records exchanged {}", ago(at)),
+                (None, None) => String::new(),
+            };
             d = d.child(
                 h_flex()
                     .gap(px(8.))
@@ -425,7 +436,7 @@ impl LinkedView {
                             .text_color(p.text)
                             .child(l.name.clone()),
                     )
-                    .child(div().min_w_0().child(format!("{reached}{heard}"))),
+                    .child(div().min_w_0().child(format!("{reached}{heard}{synced}"))),
             );
         }
         if !row.links.is_empty() {

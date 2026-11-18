@@ -5,11 +5,11 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::rows::{Link, LinkPerson};
+use super::rows::{Link, LinkPerson, LinkRecord};
 use super::{Backend, Result, Tx};
 
-const LINK_COLUMNS: &str =
-    "user_id, place_id, name, public_key, url, created_at, reached_at, reach_error, heard_at";
+const LINK_COLUMNS: &str = "user_id, place_id, name, public_key, url, created_at, reached_at, \
+     reach_error, heard_at, synced_at, sync_error";
 
 fn link(r: &sqlx::postgres::PgRow) -> Result<Link> {
     Ok(Link {
@@ -22,6 +22,20 @@ fn link(r: &sqlx::postgres::PgRow) -> Result<Link> {
         reached_at: r.try_get("reached_at")?,
         reach_error: r.try_get("reach_error")?,
         heard_at: r.try_get("heard_at")?,
+        synced_at: r.try_get("synced_at")?,
+        sync_error: r.try_get("sync_error")?,
+    })
+}
+
+fn record(r: &sqlx::postgres::PgRow) -> Result<LinkRecord> {
+    Ok(LinkRecord {
+        user_id: r.try_get("user_id")?,
+        kind: r.try_get("kind")?,
+        record_id: r.try_get("record_id")?,
+        hlc: r.try_get("hlc")?,
+        origin: r.try_get("origin")?,
+        digest: r.try_get("digest")?,
+        deleted: r.try_get("deleted")?,
     })
 }
 
@@ -151,7 +165,8 @@ impl Tx {
                      VALUES ($1, $2, $3, $4, $5, $6)
                      ON CONFLICT (user_id, place_id) DO UPDATE SET name = EXCLUDED.name,
                        public_key = EXCLUDED.public_key, url = EXCLUDED.url,
-                       reached_at = NULL, reach_error = '', heard_at = NULL",
+                       reached_at = NULL, reach_error = '', heard_at = NULL,
+                       synced_at = NULL, sync_error = ''",
                 )
                 .bind(l.user_id)
                 .bind(l.place_id)
@@ -175,11 +190,15 @@ impl Tx {
                         o.reached_at = None;
                         o.reach_error = String::new();
                         o.heard_at = None;
+                        o.synced_at = None;
+                        o.sync_error = String::new();
                     }
                     None => links.push(Link {
                         reached_at: None,
                         reach_error: String::new(),
                         heard_at: None,
+                        synced_at: None,
+                        sync_error: String::new(),
                         ..l.clone()
                     }),
                 }
@@ -275,5 +294,146 @@ impl Tx {
             }
         }
         Ok(())
+    }
+
+    /// Records an exchange of records with a linked place: when it was
+    /// done, or why it was not.
+    pub async fn set_synced(
+        &mut self,
+        user: Uuid,
+        place: Uuid,
+        outcome: std::result::Result<DateTime<Utc>, String>,
+    ) -> Result<()> {
+        let (at, error) = match outcome {
+            Ok(at) => (Some(at), String::new()),
+            Err(e) => (None, e),
+        };
+        match &mut self.inner {
+            Backend::Pg(tx) => {
+                sqlx::query(
+                    "UPDATE links SET synced_at = COALESCE($3, synced_at), sync_error = $4
+                     WHERE user_id = $1 AND place_id = $2",
+                )
+                .bind(user)
+                .bind(place)
+                .bind(at)
+                .bind(&error)
+                .execute(&mut **tx)
+                .await?;
+            }
+            Backend::Json(tx) => {
+                if let Some(l) = tx
+                    .work
+                    .links
+                    .iter_mut()
+                    .find(|l| l.user_id == user && l.place_id == place)
+                {
+                    if at.is_some() {
+                        l.synced_at = at;
+                    }
+                    l.sync_error = error;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The users with links.
+    pub async fn linked_users(&mut self) -> Result<Vec<Uuid>> {
+        let mut users: Vec<Uuid> = self.links(None).await?.iter().map(|l| l.user_id).collect();
+        users.sort();
+        users.dedup();
+        Ok(users)
+    }
+
+    /// Holds a person's records until the transaction ends, so two
+    /// exchanges of them do not interleave.
+    pub async fn lock_link_records(&mut self, user: Uuid) -> Result<()> {
+        if let Backend::Pg(tx) = &mut self.inner {
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+                .bind(format!("link-records/{user}"))
+                .execute(&mut **tx)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// What this place knows of a person's records.
+    pub async fn link_records(&mut self, user: Uuid) -> Result<Vec<LinkRecord>> {
+        match &mut self.inner {
+            Backend::Pg(tx) => sqlx::query(
+                "SELECT user_id, kind, record_id, hlc, origin, digest, deleted FROM link_records
+                 WHERE user_id = $1 ORDER BY kind, record_id",
+            )
+            .bind(user)
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(record)
+            .collect(),
+            Backend::Json(tx) => {
+                let mut out: Vec<LinkRecord> = tx
+                    .work
+                    .link_records
+                    .iter()
+                    .filter(|r| r.user_id == user)
+                    .cloned()
+                    .collect();
+                out.sort_by(|a, b| (&a.kind, &a.record_id).cmp(&(&b.kind, &b.record_id)));
+                Ok(out)
+            }
+        }
+    }
+
+    /// Sets what this place knows of one of a person's records.
+    pub async fn put_link_record(&mut self, r: &LinkRecord) -> Result<()> {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
+                sqlx::query(
+                    "INSERT INTO link_records (user_id, kind, record_id, hlc, origin, digest, deleted)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     ON CONFLICT (user_id, kind, record_id) DO UPDATE SET hlc = EXCLUDED.hlc,
+                       origin = EXCLUDED.origin, digest = EXCLUDED.digest, deleted = EXCLUDED.deleted",
+                )
+                .bind(r.user_id)
+                .bind(&r.kind)
+                .bind(&r.record_id)
+                .bind(r.hlc)
+                .bind(r.origin)
+                .bind(&r.digest)
+                .bind(r.deleted)
+                .execute(&mut **tx)
+                .await?;
+            }
+            Backend::Json(tx) => {
+                let rs = &mut tx.work.link_records;
+                match rs.iter_mut().find(|o| {
+                    o.user_id == r.user_id && o.kind == r.kind && o.record_id == r.record_id
+                }) {
+                    Some(o) => *o = r.clone(),
+                    None => rs.push(r.clone()),
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The latest time on the places' shared clock this place has seen.
+    pub async fn max_link_hlc(&mut self) -> Result<i64> {
+        match &mut self.inner {
+            Backend::Pg(tx) => Ok(sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT max(hlc) FROM link_records",
+            )
+            .fetch_one(&mut **tx)
+            .await?
+            .unwrap_or(0)),
+            Backend::Json(tx) => Ok(tx
+                .work
+                .link_records
+                .iter()
+                .map(|r| r.hlc)
+                .max()
+                .unwrap_or(0)),
+        }
     }
 }

@@ -6,8 +6,12 @@
 //! A hello says who is asking (from), whom (to), for which person, when
 //! and a nonce, signed by the asker; the answer signs the same back. The
 //! place answering records that the asker reached it, the asker that it
-//! reached the other. Every minute, and whenever a link is made, this
-//! place says hello to each place its people are linked with.
+//! reached the other. Every minute, whenever a link is made and whenever a
+//! linked person's records change, this place says hello to each place
+//! its people are linked with and exchanges their records with it
+//! (`linksync`), in messages signed by the sender and sealed to the
+//! recipient's key (`Sealed`), so neither a proxy that ends TLS nor one
+//! in between can read or change them.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,10 +39,12 @@ const WITHIN: Duration = Duration::from_secs(15);
 /// How far a hello's time may be from this place's clock.
 const SKEW: i64 = 300;
 
-/// This place: its ID, and the key that proves it.
+/// This place: its ID, and the key that proves it, whose X25519 form
+/// (`x_secret`) is what messages to it are sealed to.
 pub struct Place {
     pub id: Uuid,
     pair: Ed25519KeyPair,
+    x_secret: [u8; 32],
 }
 
 #[derive(Serialize, Deserialize)]
@@ -91,7 +97,16 @@ impl Place {
             .filter(|s| s.len() == 32)
             .ok_or("this place's key is not 32 bytes")?;
         let pair = Ed25519KeyPair::from_seed_unchecked(&seed).map_err(|e| e.to_string())?;
-        Ok(Place { id: kept.id, pair })
+        // An Ed25519 key's scalar is the first half of its seed's SHA-512,
+        // which, clamped, is the same key on the Montgomery curve.
+        let mut x_secret = [0u8; 32];
+        x_secret
+            .copy_from_slice(&ring::digest::digest(&ring::digest::SHA512, &seed).as_ref()[..32]);
+        Ok(Place {
+            id: kept.id,
+            pair,
+            x_secret,
+        })
     }
 
     /// Its public key, base64.
@@ -382,18 +397,63 @@ fn client() -> Result<reqwest::Client, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Says hello to every link now, and then every minute or whenever woken.
-pub async fn run(store: Store, place: Arc<Place>, wake: Arc<tokio::sync::Notify>) {
+/// How often this place looks for changes to its linked people's records,
+/// to send them on.
+const SCAN: Duration = Duration::from_secs(5);
+
+/// Keeps every link: looks for changes to linked people's records every
+/// few seconds, and says hello to each linked place and exchanges records
+/// with it every minute, whenever a change is found, and whenever woken.
+pub async fn run(app: Arc<crate::http::App>, place: Arc<Place>) {
+    let mut due = tokio::time::Instant::now();
+    let mut woke = true;
     loop {
-        reach_all(&store, &place).await;
-        tokio::select! {
-            _ = tokio::time::sleep(EVERY) => {}
-            _ = wake.notified() => {}
+        let changed = scan_all(&app, &place).await;
+        if changed || woke || tokio::time::Instant::now() >= due {
+            reach_all(&app, &place).await;
+            due = tokio::time::Instant::now() + EVERY;
+        }
+        woke = tokio::select! {
+            _ = tokio::time::sleep(SCAN) => false,
+            _ = app.links_wake.notified() => true,
+        };
+    }
+}
+
+fn here<'a>(app: &'a crate::http::App, place: &Place) -> crate::linksync::Here<'a> {
+    crate::linksync::Here {
+        place: place.id,
+        sealer: app.cfg.sealer.as_deref(),
+        root: &app.root,
+    }
+}
+
+/// Notices changes to every linked person's records; gives whether there
+/// were any.
+async fn scan_all(app: &crate::http::App, place: &Place) -> bool {
+    let here = here(app, place);
+    let scanned = async {
+        let users = app.store.begin().await?.linked_users().await?;
+        let mut changed = false;
+        for user in users {
+            let mut tx = app.store.begin().await?;
+            tx.lock_link_records(user).await?;
+            changed |= crate::linksync::scan(&mut tx, &here, user).await?;
+            tx.commit().await?;
+        }
+        Ok::<_, StoreError>(changed)
+    };
+    match scanned.await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("hangar-server: looking for changes to linked records: {e}");
+            false
         }
     }
 }
 
-async fn reach_all(store: &Store, place: &Place) {
+async fn reach_all(app: &crate::http::App, place: &Place) {
+    let store = &app.store;
     let links = async {
         let mut tx = store.begin().await?;
         let links = tx.links(None).await?;
@@ -412,13 +472,20 @@ async fn reach_all(store: &Store, place: &Place) {
         }
     };
     let tries = links.into_iter().map(|(person, l)| async move {
-        let outcome = hello(place, person, &l).await.map(|()| Utc::now());
-        (l, outcome)
+        let reached = hello(place, person, &l).await.map(|()| Utc::now());
+        let synced = match &reached {
+            Ok(_) => Some(sync(app, place, person, &l).await.map(|()| Utc::now())),
+            Err(_) => None,
+        };
+        (l, reached, synced)
     });
-    for (l, outcome) in futures_util::future::join_all(tries).await {
+    for (l, reached, synced) in futures_util::future::join_all(tries).await {
         let kept = async {
             let mut tx = store.begin().await?;
-            tx.set_reached(l.user_id, l.place_id, outcome).await?;
+            tx.set_reached(l.user_id, l.place_id, reached).await?;
+            if let Some(synced) = synced {
+                tx.set_synced(l.user_id, l.place_id, synced).await?;
+            }
             tx.commit().await
         };
         if let Err(e) = kept.await {
@@ -427,10 +494,367 @@ async fn reach_all(store: &Store, place: &Place) {
     }
 }
 
+/// Exchanges a person's records with a linked place: sends every version
+/// this place has, takes the records it has newer, and sends those it
+/// wants.
+async fn sync(
+    app: &crate::http::App,
+    place: &Place,
+    person: Uuid,
+    link: &Link,
+) -> Result<(), String> {
+    use crate::linksync::{Exchange, Records, Versions};
+    let here = here(app, place);
+    let user = link.user_id;
+    let ours = async {
+        let mut tx = app.store.begin().await?;
+        tx.lock_link_records(user).await?;
+        crate::linksync::scan(&mut tx, &here, user).await?;
+        let v = crate::linksync::versions(&mut tx, user).await?;
+        tx.commit().await?;
+        Ok::<_, StoreError>(v)
+    }
+    .await
+    .map_err(|e| e.to_string())?;
+    let msg = Sealed::make(
+        place,
+        "versions",
+        link.place_id,
+        &link.public_key,
+        person,
+        None,
+        &Versions { versions: ours },
+    )?;
+    let answer = post(link, "sync", &msg).await?.ok_or("it gave no answer")?;
+    if answer.from != link.place_id || answer.person != person || answer.nonce != msg.nonce {
+        return Err("it answered another message".into());
+    }
+    let ex: Exchange = answer
+        .read(place, "exchange", &link.public_key)
+        .map_err(|r| format!("its answer could not be read: {r:?}"))?;
+    let (taken, wanted) = async {
+        let mut tx = app.store.begin().await?;
+        tx.lock_link_records(user).await?;
+        let taken = crate::linksync::accept(&mut tx, &here, user, &ex.records).await?;
+        let wanted = crate::linksync::records(&mut tx, &here, user, &ex.want).await?;
+        tx.commit().await?;
+        Ok::<_, StoreError>((taken, wanted))
+    }
+    .await
+    .map_err(|e| e.to_string())?;
+    if taken > 0 {
+        // What came may be news to the other linked places.
+        app.links_wake.notify_one();
+    }
+    if !wanted.is_empty() {
+        let msg = Sealed::make(
+            place,
+            "records",
+            link.place_id,
+            &link.public_key,
+            person,
+            None,
+            &Records { records: wanted },
+        )?;
+        post(link, "push", &msg).await?;
+    }
+    Ok(())
+}
+
+/// Answers another place's versions of a person's records: what this
+/// place wants, and the records it has newer, sealed to it.
+pub async fn answer_sync(
+    app: &crate::http::App,
+    place: &Place,
+    msg: &Sealed,
+) -> Result<Sealed, Refused> {
+    use crate::linksync::Versions;
+    let link = admit(&app.store, msg.from, msg.person).await?;
+    let theirs: Versions = msg.read(place, "versions", &link.public_key)?;
+    let here = here(app, place);
+    let user = link.user_id;
+    let ex = async {
+        let mut tx = app.store.begin().await?;
+        tx.lock_link_records(user).await?;
+        crate::linksync::scan(&mut tx, &here, user).await?;
+        let ex = crate::linksync::exchange(&mut tx, &here, user, &theirs.versions).await?;
+        tx.set_heard(user, link.place_id, Utc::now()).await?;
+        tx.commit().await?;
+        Ok::<_, StoreError>(ex)
+    }
+    .await
+    .map_err(|e| {
+        eprintln!("hangar-server: answering a linked place: {e}");
+        Refused::NotLinked
+    })?;
+    Sealed::make(
+        place,
+        "exchange",
+        msg.from,
+        &link.public_key,
+        msg.person,
+        Some(&msg.nonce),
+        &ex,
+    )
+    .map_err(|e| {
+        eprintln!("hangar-server: answering a linked place: {e}");
+        Refused::Unproven
+    })
+}
+
+/// Takes the records another place sent for a person.
+pub async fn accept_push(
+    app: &crate::http::App,
+    place: &Place,
+    msg: &Sealed,
+) -> Result<(), Refused> {
+    use crate::linksync::Records;
+    let link = admit(&app.store, msg.from, msg.person).await?;
+    let sent: Records = msg.read(place, "records", &link.public_key)?;
+    let here = here(app, place);
+    let user = link.user_id;
+    let taken = async {
+        let mut tx = app.store.begin().await?;
+        tx.lock_link_records(user).await?;
+        let taken = crate::linksync::accept(&mut tx, &here, user, &sent.records).await?;
+        tx.commit().await?;
+        Ok::<_, StoreError>(taken)
+    }
+    .await
+    .map_err(|e| {
+        eprintln!("hangar-server: taking a linked place's records: {e}");
+        Refused::NotLinked
+    })?;
+    if taken > 0 {
+        app.links_wake.notify_one();
+    }
+    Ok(())
+}
+
 fn b64(b: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(b)
 }
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// A place's public key (base64 Ed25519) as the X25519 key messages to it
+/// are sealed to.
+fn x_public(public_key: &str) -> Option<curve25519_dalek::montgomery::MontgomeryPoint> {
+    let bytes: [u8; 32] = base64::engine::general_purpose::STANDARD
+        .decode(public_key)
+        .ok()?
+        .try_into()
+        .ok()?;
+    curve25519_dalek::edwards::CompressedEdwardsY(bytes)
+        .decompress()
+        .map(|p| p.to_montgomery())
+}
+
+/// The key a message is sealed with: HKDF-SHA256 of the X25519 secret the
+/// sender's one-time key and the recipient's share, bound to both.
+fn box_key(
+    shared: curve25519_dalek::montgomery::MontgomeryPoint,
+    eph: &[u8; 32],
+    to: &[u8; 32],
+) -> Result<ring::aead::LessSafeKey, String> {
+    if shared.to_bytes() == [0u8; 32] {
+        return Err("a key that agrees on nothing".into());
+    }
+    let mut salt = Vec::with_capacity(64);
+    salt.extend_from_slice(eph);
+    salt.extend_from_slice(to);
+    let prk = ring::hkdf::Salt::new(ring::hkdf::HKDF_SHA256, &salt).extract(&shared.to_bytes());
+    let okm = prk
+        .expand(&[b"hangar-link-v1 box"], &ring::aead::CHACHA20_POLY1305)
+        .map_err(|_| "deriving a key".to_string())?;
+    Ok(ring::aead::LessSafeKey::new(ring::aead::UnboundKey::from(
+        okm,
+    )))
+}
+
+/// Seals plain to the place whose public key is given, bound to aad: a
+/// one-time key of the sender's, and the sealed bytes, both base64.
+fn seal(to_public_key: &str, aad: &str, plain: &[u8]) -> Result<(String, String), String> {
+    let to = x_public(to_public_key).ok_or("the place's key is not an Ed25519 public key")?;
+    let mut eph_secret = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut eph_secret);
+    let eph = curve25519_dalek::constants::X25519_BASEPOINT.mul_clamped(eph_secret);
+    let key = box_key(to.mul_clamped(eph_secret), &eph.to_bytes(), &to.to_bytes())?;
+    let mut buf = plain.to_vec();
+    key.seal_in_place_append_tag(
+        ring::aead::Nonce::assume_unique_for_key([0u8; 12]),
+        ring::aead::Aad::from(aad.as_bytes()),
+        &mut buf,
+    )
+    .map_err(|_| "sealing".to_string())?;
+    Ok((b64(&eph.to_bytes()), b64(&buf)))
+}
+
+impl Place {
+    /// Opens what was sealed to this place, bound to aad.
+    fn open(&self, eph: &str, sealed: &str, aad: &str) -> Option<Vec<u8>> {
+        let engine = base64::engine::general_purpose::STANDARD;
+        let eph: [u8; 32] = engine.decode(eph).ok()?.try_into().ok()?;
+        let eph = curve25519_dalek::montgomery::MontgomeryPoint(eph);
+        let me = curve25519_dalek::constants::X25519_BASEPOINT.mul_clamped(self.x_secret);
+        let key = box_key(
+            eph.mul_clamped(self.x_secret),
+            &eph.to_bytes(),
+            &me.to_bytes(),
+        )
+        .ok()?;
+        let mut buf = engine.decode(sealed).ok()?;
+        let plain = key
+            .open_in_place(
+                ring::aead::Nonce::assume_unique_for_key([0u8; 12]),
+                ring::aead::Aad::from(aad.as_bytes()),
+                &mut buf,
+            )
+            .ok()?;
+        Some(plain.to_vec())
+    }
+}
+
+/// A message between linked places: who sends it to whom, for which
+/// person, when, its kind, and what it carries sealed to the recipient,
+/// all signed by the sender. An answer has the nonce of what it answers.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Sealed {
+    pub from: Uuid,
+    pub to: Uuid,
+    pub person: Uuid,
+    pub time: i64,
+    pub nonce: String,
+    pub kind: String,
+    pub eph: String,
+    pub data: String,
+    pub signature: String,
+}
+
+impl Sealed {
+    /// What the sealed data is bound to.
+    fn aad(&self) -> String {
+        format!(
+            "hangar-link-v1 {}\n{}\n{}\n{}\n{}\n{}",
+            self.kind, self.from, self.to, self.person, self.time, self.nonce
+        )
+    }
+
+    /// What is signed: the same, the one-time key, and the data's SHA-256.
+    fn statement(&self) -> String {
+        let digest = ring::digest::digest(&ring::digest::SHA256, self.data.as_bytes());
+        format!("{}\n{}\n{}", self.aad(), self.eph, hex(digest.as_ref()))
+    }
+
+    /// A message from place to the place `to` (whose key is given), for
+    /// person, carrying payload; an answer gives the nonce it answers.
+    pub fn make(
+        place: &Place,
+        kind: &str,
+        to: Uuid,
+        to_key: &str,
+        person: Uuid,
+        nonce: Option<&str>,
+        payload: &impl Serialize,
+    ) -> Result<Sealed, String> {
+        let nonce = match nonce {
+            Some(n) => n.to_string(),
+            None => {
+                let mut n = [0u8; 16];
+                rand::thread_rng().fill_bytes(&mut n);
+                b64(&n)
+            }
+        };
+        let mut s = Sealed {
+            from: place.id,
+            to,
+            person,
+            time: Utc::now().timestamp(),
+            nonce,
+            kind: kind.to_string(),
+            eph: String::new(),
+            data: String::new(),
+            signature: String::new(),
+        };
+        let plain = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
+        (s.eph, s.data) = seal(to_key, &s.aad(), &plain)?;
+        s.signature = place.sign(&s.statement());
+        Ok(s)
+    }
+
+    /// What it carries, once it is shown to be a message of this kind to
+    /// place from the place whose key is given, and recent.
+    pub fn read<T: serde::de::DeserializeOwned>(
+        &self,
+        place: &Place,
+        kind: &str,
+        from_key: &str,
+    ) -> Result<T, Refused> {
+        if self.to != place.id {
+            return Err(Refused::Elsewhere);
+        }
+        if self.kind != kind || (Utc::now().timestamp() - self.time).abs() > SKEW {
+            return Err(Refused::Stale);
+        }
+        if !verify(from_key, &self.statement(), &self.signature) {
+            return Err(Refused::Unproven);
+        }
+        let plain = place
+            .open(&self.eph, &self.data, &self.aad())
+            .ok_or(Refused::Unproven)?;
+        serde_json::from_slice(&plain).map_err(|_| Refused::Unproven)
+    }
+}
+
+/// The user a message is for, and their link with the place sending it:
+/// the person's account here linked with that place.
+pub async fn admit(store: &Store, from: Uuid, person: Uuid) -> Result<Link, Refused> {
+    let found = async {
+        let mut tx = store.begin().await?;
+        let Some(user) = tx.user_by_person(person).await? else {
+            return Ok(None);
+        };
+        tx.link(user, from).await
+    }
+    .await
+    .map_err(|e: StoreError| {
+        eprintln!("hangar-server: a linked place's message: {e}");
+        Refused::NotLinked
+    })?;
+    found.ok_or(Refused::NotLinked)
+}
+
+/// Posts a message to a linked place, giving its answer.
+pub async fn post(link: &Link, path: &str, msg: &Sealed) -> Result<Option<Sealed>, String> {
+    let url = format!("{}/api/link/v1/{path}", link.url.trim_end_matches('/'));
+    let resp = client()?
+        .post(&url)
+        .json(msg)
+        .send()
+        .await
+        .map_err(|e| words(&e))?;
+    let status = resp.status();
+    if status == reqwest::StatusCode::NO_CONTENT {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        #[derive(Deserialize)]
+        struct Error {
+            #[serde(default)]
+            error: String,
+        }
+        let e = resp
+            .json::<Error>()
+            .await
+            .map(|e| e.error)
+            .unwrap_or_default();
+        return Err(if e.is_empty() {
+            format!("it answered {status}")
+        } else {
+            e
+        });
+    }
+    resp.json().await.map(Some).map_err(|e| e.to_string())
 }

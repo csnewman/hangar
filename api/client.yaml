@@ -1293,6 +1293,13 @@ components:
           type: string
           format: date-time
           description: When the other place last reached this one; absent when never.
+        synced_at:
+          type: string
+          format: date-time
+          description: When this place last exchanged the person's records with the other; absent when never.
+        sync_error:
+          type: string
+          description: Why this place could not exchange records with the other when it last tried; absent when it did.
 
     SignInLink:
       type: object

@@ -145,7 +145,7 @@ fn states_follow_what_each_place_reached_lately() {
         json!([link(
             B,
             "lab",
-            json!({"reached_at": recent, "heard_at": recent})
+            json!({"reached_at": recent, "heard_at": recent, "synced_at": recent})
         )]),
     );
     let b = known(
@@ -169,7 +169,7 @@ fn states_follow_what_each_place_reached_lately() {
     let mut d = known("off", "Offline one", C, "pa", json!([]));
     d.links = Err("no response".into());
     let rows = linking::rows(&[a, b, c, d], now);
-    assert_eq!(rows[0].state, State::Linked);
+    assert_eq!(rows[0].state, State::UpToDate, "reached and synced lately");
     assert_eq!(
         rows[0].reaches,
         vec!["Homelab".to_string()],
@@ -235,4 +235,23 @@ fn unlinking_a_place_removes_both_halves() {
             },
         ]
     );
+}
+
+#[test]
+fn a_failed_exchange_of_records_says_why() {
+    let now = Utc::now();
+    let recent = (now - Duration::seconds(30)).to_rfc3339();
+    let a = known(
+        "home",
+        "Home server",
+        A,
+        "pa",
+        json!([link(
+            B,
+            "lab",
+            json!({"reached_at": recent, "sync_error": "it gave no answer"})
+        )]),
+    );
+    let rows = linking::rows(&[a], now);
+    assert_eq!(rows[0].state, State::Behind("it gave no answer".into()));
 }

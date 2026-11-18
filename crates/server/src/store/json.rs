@@ -17,7 +17,7 @@ use super::rows::{
     RegistryBlob, RegistryUpload, RepositoryBlob, RepositoryCollaborator, ServerKey, Session,
     SignInGrant, SshKey, Task, Team, TeamMember, Template, TlsEntry, TlsLock, User, Worker,
 };
-use super::rows::{Link, LinkPerson};
+use super::rows::{Link, LinkPerson, LinkRecord};
 use super::{Error, Result};
 
 /// Everything the server keeps, as the Postgres tables hold it.
@@ -69,6 +69,7 @@ pub struct State {
     pub sign_in_grants: Vec<SignInGrant>,
     pub link_persons: Vec<LinkPerson>,
     pub links: Vec<Link>,
+    pub link_records: Vec<LinkRecord>,
 }
 
 impl State {

@@ -36,6 +36,8 @@ fn link_spec(l: crate::store::rows::Link) -> types::Link {
         reached_at: l.reached_at,
         reach_error: Some(l.reach_error).filter(|e| !e.is_empty()),
         heard_at: l.heard_at,
+        synced_at: l.synced_at,
+        sync_error: Some(l.sync_error).filter(|e| !e.is_empty()),
     }
 }
 
@@ -105,6 +107,8 @@ async fn put_link(
         reached_at: None,
         reach_error: String::new(),
         heard_at: None,
+        synced_at: None,
+        sync_error: String::new(),
     };
     let kept = crate::link::put(&app.store, &s.principal, &s.ip, link, person)
         .await

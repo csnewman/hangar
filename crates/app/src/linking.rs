@@ -58,6 +58,11 @@ pub enum State {
     NotLinked,
     /// Linked, and it reaches a linked place or one reaches it.
     Linked,
+    /// Linked, and its records were lately exchanged with every linked
+    /// place it reaches.
+    UpToDate,
+    /// Linked, but an exchange of records failed, and why.
+    Behind(String),
     /// Linked, but it reaches no linked place and none reaches it, and
     /// why, as its last try said.
     Waiting(String),
@@ -71,6 +76,10 @@ pub struct LinkRow {
     pub reached: Option<DateTime<Utc>>,
     pub error: Option<String>,
     pub heard: Option<DateTime<Utc>>,
+    /// When its records were last exchanged with the other place, or why
+    /// they could not be.
+    pub synced: Option<DateTime<Utc>>,
+    pub sync_error: Option<String>,
 }
 
 /// A place as the page shows it.
@@ -137,6 +146,8 @@ pub fn rows(known: &[Known], now: DateTime<Utc>) -> Vec<Row> {
                     reached: link.reached_at,
                     error: link.reach_error.clone(),
                     heard: link.heard_at,
+                    synced: link.synced_at,
+                    sync_error: link.sync_error.clone(),
                 });
             }
             // What the other places say of it: one that reached it was
@@ -163,7 +174,18 @@ pub fn rows(known: &[Known], now: DateTime<Utc>) -> Vec<Row> {
             } else if l.items.is_empty() {
                 State::NotLinked
             } else if !row.reaches.is_empty() || !row.reached_by.is_empty() {
-                State::Linked
+                let reached: Vec<&LinkRow> = row
+                    .links
+                    .iter()
+                    .filter(|l| fresh(l.reached, now) && l.error.is_none())
+                    .collect();
+                if let Some(e) = reached.iter().find_map(|l| l.sync_error.clone()) {
+                    State::Behind(e)
+                } else if !reached.is_empty() && reached.iter().all(|l| fresh(l.synced, now)) {
+                    State::UpToDate
+                } else {
+                    State::Linked
+                }
             } else {
                 State::Waiting(
                     row.links
