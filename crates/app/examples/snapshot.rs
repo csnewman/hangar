@@ -21,8 +21,9 @@
 //! SNAPSHOT_PREFS=JSON sets settings over the copy of the user's, objects
 //! merged ({"terminal": {"theme_light": "Nord"}});
 //! SNAPSHOT_SETTINGS=page opens Settings at a page (appearance, keymap,
-//! editor, terminal, notifications, places, linked, packs, or account and
-//! browser for the first place);
+//! editor, terminal, notifications, places, linked, packs, or account,
+//! templates, place-packs, teams, images, users, workers, audit and browser
+//! for the first place);
 //! SNAPSHOT_ENV_SETTINGS=page opens the opened environment's settings at a
 //! page (general, resources, files, access, ports, danger);
 //! SNAPSHOT_NEW_ENV=1 opens the New environment sheet (SNAPSHOT_PRESS
@@ -46,6 +47,9 @@
 //! SNAPSHOT_RIGHT_CLICK=X,Y right-clicks there, as the pointer would, and
 //! SNAPSHOT_PRESS="down enter |text| enter" then presses keys, typing what
 //! is between bars, and SNAPSHOT_THEN_CLICK="X,Y;..." clicks after;
+//! SNAPSHOT_STEPS="click X,Y; scroll X,Y,DY; press KEYS; type TEXT; wait S"
+//! runs steps in turn after the clicks: a click, the wheel turned DY
+//! pixels down over a point, keys pressed, text typed, a wait;
 //! SNAPSHOT_HOLD=seconds waits before the picture is taken.
 
 use std::time::Duration;
@@ -181,6 +185,13 @@ fn main() {
                             "linked" => Page::Linked,
                             "packs" => Page::Packs,
                             "account" => Page::Account(first),
+                            "templates" => Page::Templates(first),
+                            "place-packs" => Page::PlacePacks(first),
+                            "teams" => Page::Teams(first),
+                            "images" => Page::Images(first),
+                            "users" => Page::Users(first),
+                            "workers" => Page::Workers(first),
+                            "audit" => Page::Audit(first),
                             "browser" => Page::Browser(first),
                             _ => Page::Appearance,
                         };
@@ -638,6 +649,7 @@ fn main() {
                     settle(cx, handle.into(), Duration::from_secs(1)).await;
                 }
                 click_all(cx, handle.into(), "SNAPSHOT_CLICK").await;
+                steps(cx, handle.into()).await;
                 // A drag with the left button, from one point to another.
                 let drag: Vec<(f32, f32)> = std::env::var("SNAPSHOT_DRAG")
                     .unwrap_or_default()
@@ -815,6 +827,90 @@ async fn click_all(cx: &mut gpui::AsyncApp, handle: gpui::AnyWindowHandle, var: 
             );
         });
         settle(cx, handle, Duration::from_secs(1)).await;
+    }
+}
+
+/// SNAPSHOT_STEPS, in turn.
+async fn steps(cx: &mut gpui::AsyncApp, handle: gpui::AnyWindowHandle) {
+    use gpui::{
+        Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput, ScrollDelta,
+        ScrollEvent, ScrollSource, TouchPhase,
+    };
+    let all = std::env::var("SNAPSHOT_STEPS").unwrap_or_default();
+    for step in all.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+        let (what, rest) = step.split_once(' ').unwrap_or((step, ""));
+        let n: Vec<f32> = rest
+            .split(',')
+            .filter_map(|x| x.trim().parse().ok())
+            .collect();
+        match (what, n.as_slice()) {
+            ("click", [x, y]) => {
+                let position = gpui::point(px(*x), px(*y));
+                let _ = cx.update_window(handle, |_, window, cx| {
+                    window.dispatch_event(
+                        PlatformInput::MouseDown(MouseDownEvent {
+                            button: MouseButton::Left,
+                            position,
+                            modifiers: Modifiers::none(),
+                            click_count: 1,
+                            first_mouse: false,
+                        }),
+                        cx,
+                    );
+                    window.dispatch_event(
+                        PlatformInput::MouseUp(MouseUpEvent {
+                            button: MouseButton::Left,
+                            position,
+                            modifiers: Modifiers::none(),
+                            click_count: 1,
+                        }),
+                        cx,
+                    );
+                });
+            }
+            ("scroll", [x, y, dy]) => {
+                let _ = cx.update_window(handle, |_, window, cx| {
+                    window.dispatch_event(
+                        PlatformInput::Scroll(ScrollEvent {
+                            position: gpui::point(px(*x), px(*y)),
+                            delta: ScrollDelta::Pixels(gpui::point(px(0.), px(-*dy))),
+                            modifiers: Modifiers::none(),
+                            touch_phase: TouchPhase::Moved,
+                            source: ScrollSource::default(),
+                        }),
+                        cx,
+                    );
+                });
+            }
+            ("press" | "type", _) => {
+                let keys: Vec<String> = if what == "type" {
+                    rest.chars()
+                        .map(|c| {
+                            if c == ' ' {
+                                "space".into()
+                            } else {
+                                c.to_string()
+                            }
+                        })
+                        .collect()
+                } else {
+                    rest.split_whitespace().map(str::to_string).collect()
+                };
+                for k in keys {
+                    let k: &'static str = Box::leak(k.into_boxed_str());
+                    let Some(stroke) = gpui::Keystroke::parse(k).ok() else {
+                        continue;
+                    };
+                    let _ = cx.update_window(handle, |_, window, cx| {
+                        window.dispatch_keystroke(stroke, cx);
+                    });
+                    settle(cx, handle, Duration::from_millis(80)).await;
+                }
+            }
+            ("wait", [secs]) => settle(cx, handle, Duration::from_secs_f32(*secs)).await,
+            _ => eprintln!("snapshot: a step it does not know: {step}"),
+        }
+        settle(cx, handle, Duration::from_millis(800)).await;
     }
 }
 

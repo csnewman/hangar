@@ -281,6 +281,270 @@ impl Client {
         self.all(first)
     }
 
+    /// A request's body, from JSON, as the call's type: the pages build
+    /// their bodies as the spec reads, and a field the spec refuses is an
+    /// error here, not at the server.
+    fn body<T: serde::de::DeserializeOwned>(v: serde_json::Value) -> Result<T, Error> {
+        serde_json::from_value(v).map_err(|e| Error::Status(400, e.to_string()))
+    }
+
+    /// A template whole: its recipe, collaborators and what the user may
+    /// do with it.
+    pub fn template(&self, id: &str) -> Result<types::TemplateDetail, Error> {
+        self.call(|c| c.get_template(id))
+    }
+
+    pub fn create_template(
+        &self,
+        input: serde_json::Value,
+    ) -> Result<types::TemplateDetail, Error> {
+        let b: types::TemplateInput = Self::body(input)?;
+        self.call(|c| c.create_template(&b))
+    }
+
+    pub fn update_template(
+        &self,
+        id: &str,
+        input: serde_json::Value,
+    ) -> Result<types::TemplateDetail, Error> {
+        let b: types::TemplateInput = Self::body(input)?;
+        self.call(|c| c.update_template(id, &b))
+    }
+
+    pub fn delete_template(&self, id: &str) -> Result<(), Error> {
+        self.call(|c| c.delete_template(id))
+    }
+
+    /// Who besides its owner uses and edits a template: people and teams.
+    pub fn set_template_collaborators(
+        &self,
+        id: &str,
+        users: &[String],
+        teams: &[String],
+    ) -> Result<types::TemplateDetail, Error> {
+        let b: types::Collaborators =
+            Self::body(serde_json::json!({ "user_ids": users, "team_ids": teams }))?;
+        self.call(|c| c.set_template_collaborators(id, &b))
+    }
+
+    /// Everyone at the place, to choose collaborators and members from.
+    pub fn people(&self) -> Result<Vec<types::Person>, Error> {
+        let first = self.call(|c| c.list_people())?;
+        self.all(first)
+    }
+
+    pub fn teams(&self) -> Result<Vec<types::Team>, Error> {
+        let first = self.call(|c| c.list_teams())?;
+        self.all(first)
+    }
+
+    /// A team with its members.
+    pub fn team(&self, id: &str) -> Result<types::Team, Error> {
+        self.call(|c| c.get_team(id))
+    }
+
+    pub fn create_team(&self, input: serde_json::Value) -> Result<types::Team, Error> {
+        let b: types::CreateTeam = Self::body(input)?;
+        self.call(|c| c.create_team(&b))
+    }
+
+    pub fn update_team(&self, id: &str, input: serde_json::Value) -> Result<types::Team, Error> {
+        let b: types::TeamInput = Self::body(input)?;
+        self.call(|c| c.update_team(id, &b))
+    }
+
+    pub fn delete_team(&self, id: &str) -> Result<(), Error> {
+        self.call(|c| c.delete_team(id))
+    }
+
+    /// Adds someone to a team, or changes their role: viewer, member or
+    /// admin.
+    pub fn set_team_member(&self, id: &str, user: &str, role: &str) -> Result<types::Team, Error> {
+        let b: types::TeamMembership = Self::body(serde_json::json!({ "role": role }))?;
+        self.call(|c| c.set_team_member(id, user, &b))
+    }
+
+    pub fn remove_team_member(&self, id: &str, user: &str) -> Result<types::Team, Error> {
+        self.call(|c| c.remove_team_member(id, user))
+    }
+
+    /// The image repositories of the place's registry the user may see.
+    pub fn images(&self) -> Result<Vec<types::ImageRepository>, Error> {
+        let first = self.call(|c| c.list_image_repositories())?;
+        self.all(first)
+    }
+
+    /// A repository with its tags.
+    pub fn image(&self, id: &str) -> Result<types::ImageRepository, Error> {
+        self.call(|c| c.get_image_repository(id))
+    }
+
+    pub fn update_image(
+        &self,
+        id: &str,
+        input: serde_json::Value,
+    ) -> Result<types::ImageRepository, Error> {
+        let b: types::ImageRepositoryInput = Self::body(input)?;
+        self.call(|c| c.update_image_repository(id, &b))
+    }
+
+    pub fn set_image_collaborators(
+        &self,
+        id: &str,
+        users: &[String],
+        teams: &[String],
+    ) -> Result<types::ImageRepository, Error> {
+        let b: types::Collaborators =
+            Self::body(serde_json::json!({ "user_ids": users, "team_ids": teams }))?;
+        self.call(|c| c.set_image_repository_collaborators(id, &b))
+    }
+
+    pub fn delete_image(&self, id: &str) -> Result<(), Error> {
+        self.call(|c| c.delete_image_repository(id))
+    }
+
+    pub fn delete_image_tag(&self, id: &str, tag: &str) -> Result<types::ImageRepository, Error> {
+        self.call(|c| c.delete_image_tag(id, tag))
+    }
+
+    /// The place's users, for an administrator.
+    pub fn users(&self) -> Result<Vec<types::User>, Error> {
+        let first = self.call(|c| c.list_users())?;
+        self.all(first)
+    }
+
+    pub fn create_user(&self, input: serde_json::Value) -> Result<types::User, Error> {
+        let b: types::CreateUser = Self::body(input)?;
+        self.call(|c| c.create_user(&b))
+    }
+
+    /// Changes a user: only the fields given.
+    pub fn update_user(&self, id: &str, input: serde_json::Value) -> Result<types::User, Error> {
+        let b: types::UpdateUser = Self::body(input)?;
+        self.call(|c| c.update_user(id, &b))
+    }
+
+    pub fn delete_user(&self, id: &str) -> Result<(), Error> {
+        self.call(|c| c.delete_user(id))
+    }
+
+    /// The place's workers, for an administrator.
+    pub fn workers(&self) -> Result<Vec<types::Worker>, Error> {
+        let first = self.call(|c| c.list_workers())?;
+        self.all(first)
+    }
+
+    pub fn worker(&self, id: &str) -> Result<types::Worker, Error> {
+        self.call(|c| c.get_worker(id))
+    }
+
+    /// A worker's recent log, from offset on.
+    pub fn worker_log(&self, id: &str, offset: Option<i64>) -> Result<types::LogPart, Error> {
+        self.call(|c| c.get_worker_log(id, offset))
+    }
+
+    pub fn revoke_worker(&self, id: &str) -> Result<(), Error> {
+        self.call(|c| c.revoke_worker(id))
+    }
+
+    pub fn delete_worker(&self, id: &str) -> Result<(), Error> {
+        self.call(|c| c.delete_worker(id))
+    }
+
+    /// Has a worker delete a copy of an image nothing uses.
+    pub fn remove_worker_image(&self, id: &str, image: &types::ImageCopy) -> Result<(), Error> {
+        self.call(|c| c.remove_worker_image(id, image))
+    }
+
+    /// Has a worker delete environments the server does not know.
+    pub fn remove_unknown(&self, id: &str, environments: &[String]) -> Result<(), Error> {
+        let b: types::RemoveUnknownEnvironments =
+            Self::body(serde_json::json!({ "environments": environments }))?;
+        self.call(|c| c.remove_unknown_environments(id, &b))
+    }
+
+    /// The audit log, newest first, a page of it before an event's ID.
+    pub fn audit(&self, before: Option<i64>, limit: i64) -> Result<Vec<types::AuditEvent>, Error> {
+        let first = self.call(|c| c.list_audit(before, Some(limit), None))?;
+        Ok(first.items)
+    }
+
+    pub fn delete_pack(&self, id: &str) -> Result<(), Error> {
+        self.call(|c| c.delete_pack(id))
+    }
+
+    /// Makes a shared copy of a pack, of the user's or of a team.
+    pub fn create_copy(&self, pack: &str, input: serde_json::Value) -> Result<types::Copy, Error> {
+        let b: types::CopyInput = Self::body(input)?;
+        self.call(|c| c.create_copy(pack, &b))
+    }
+
+    pub fn rename_copy(&self, id: &str, name: &str) -> Result<types::Copy, Error> {
+        let b: types::CopyName = Self::body(serde_json::json!({ "name": name }))?;
+        self.call(|c| c.rename_copy(id, &b))
+    }
+
+    pub fn delete_copy(&self, id: &str) -> Result<(), Error> {
+        self.call(|c| c.delete_copy(id))
+    }
+
+    /// The copy the user uses of a pack by default; None their own.
+    pub fn set_default_copy(&self, pack: &str, copy: Option<&str>) -> Result<(), Error> {
+        let b: types::CopyChoice = Self::body(serde_json::json!({ "copy_id": copy }))?;
+        self.call(|c| c.set_default_copy(pack, &b))
+    }
+
+    /// A copy, its pack, and its files without their contents.
+    pub fn copy_files(&self, id: &str) -> Result<types::CopyFiles, Error> {
+        self.call(|c| c.get_copy(id))
+    }
+
+    pub fn copy_file(&self, id: &str, path: &str) -> Result<types::PackFileContent, Error> {
+        self.call(|c| c.get_copy_file(id, path))
+    }
+
+    /// Writes a file of a copy; mode None keeps the file's, else a new
+    /// file's default.
+    pub fn put_copy_file(
+        &self,
+        id: &str,
+        path: &str,
+        content: &str,
+        mode: Option<i64>,
+    ) -> Result<types::PackFile, Error> {
+        let mut v = serde_json::json!({ "content": content });
+        if let Some(m) = mode {
+            v["mode"] = m.into();
+        }
+        let b: types::PutPackFile = Self::body(v)?;
+        self.call(|c| c.put_copy_file(id, path, &b))
+    }
+
+    pub fn set_copy_file_mode(
+        &self,
+        id: &str,
+        path: &str,
+        mode: i64,
+    ) -> Result<types::PackFile, Error> {
+        let b: types::PackFileMode = Self::body(serde_json::json!({ "mode": mode }))?;
+        self.call(|c| c.set_copy_file_mode(id, path, &b))
+    }
+
+    pub fn delete_copy_file(&self, id: &str, path: &str) -> Result<(), Error> {
+        self.call(|c| c.delete_copy_file(id, path))
+    }
+
+    /// The environment's files whose copy and its own differ.
+    pub fn conflicts(&self, id: &str) -> Result<Vec<types::FileConflict>, Error> {
+        let first = self.call(|c| c.list_environment_conflicts(id))?;
+        Ok(first.items)
+    }
+
+    pub fn resolve_conflict(&self, id: &str, input: serde_json::Value) -> Result<(), Error> {
+        let b: types::ResolveConflict = Self::body(input)?;
+        self.call(|c| c.resolve_environment_conflict(id, &b))
+    }
+
     /// Makes a pack of the user's own.
     pub fn create_pack(&self, input: &types::PackInput) -> Result<types::Pack, Error> {
         self.call(|c| c.create_pack(input))
@@ -745,6 +1009,11 @@ pages!(
     PackList => Pack,
     CopyList => Copy,
     ReplacedFileList => ReplacedFile,
+    PersonList => Person,
+    TeamList => Team,
+    ImageRepositoryList => ImageRepository,
+    UserList => User,
+    WorkerList => Worker,
 );
 
 /// What an error answer says: the spec's Error body, or nothing for a call

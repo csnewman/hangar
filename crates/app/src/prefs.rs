@@ -39,11 +39,37 @@ pub enum Page {
     Hangar(String),
     /// The user's account at a place.
     Account(String),
+    /// A place's templates, packs (its Files), teams and images, and, for
+    /// its administrators, its users, workers and audit log.
+    Templates(String),
+    PlacePacks(String),
+    Teams(String),
+    Images(String),
+    Users(String),
+    Workers(String),
+    Audit(String),
     /// A place's own pages, in the browser.
     Browser(String),
 }
 
 impl Page {
+    /// The place a page is of, if it is a place's.
+    pub fn place(&self) -> Option<&str> {
+        match self {
+            Page::Hangar(id)
+            | Page::Account(id)
+            | Page::Templates(id)
+            | Page::PlacePacks(id)
+            | Page::Teams(id)
+            | Page::Images(id)
+            | Page::Users(id)
+            | Page::Workers(id)
+            | Page::Audit(id)
+            | Page::Browser(id) => Some(id),
+            _ => None,
+        }
+    }
+
     pub const APP: [Page; 6] = [
         Page::Appearance,
         Page::Keymap,
@@ -65,6 +91,13 @@ impl Page {
             Page::Packs => "Packs",
             Page::Hangar(_) => "This Hangar",
             Page::Account(_) => "Account",
+            Page::Templates(_) => "Templates",
+            Page::PlacePacks(_) => "Packs",
+            Page::Teams(_) => "Teams",
+            Page::Images(_) => "Images",
+            Page::Users(_) => "Users",
+            Page::Workers(_) => "Workers",
+            Page::Audit(_) => "Audit Log",
             Page::Browser(_) => "Web Pages",
         }
     }
@@ -178,6 +211,32 @@ impl Page {
                 "revoke",
                 "user",
             ],
+            Page::Templates(_) => &[
+                "template",
+                "image",
+                "machine",
+                "repositories",
+                "projects",
+                "collaborators",
+                "placement",
+                "naming",
+                "untrusted",
+            ],
+            Page::PlacePacks(_) => &[
+                "files",
+                "pack",
+                "copies",
+                "copy",
+                "paths",
+                "sensitive",
+                "restore",
+                "merge",
+            ],
+            Page::Teams(_) => &["team", "members", "roles", "viewer", "admin"],
+            Page::Images(_) => &["registry", "repository", "tags", "push", "pull"],
+            Page::Users(_) => &["users", "accounts", "password", "disable", "administrator"],
+            Page::Workers(_) => &["machines", "worker", "revoke", "labels", "log", "capacity"],
+            Page::Audit(_) => &["audit", "log", "history", "events", "who"],
             Page::Browser(_) => &[
                 "templates",
                 "packs",
@@ -234,6 +293,8 @@ pub struct SettingsView {
     accounts: Vec<(String, Entity<AccountView>)>,
     /// Each made Hangar's page, made when first shown.
     hangars: Vec<(String, Entity<ThisHangarView>)>,
+    /// A place's other pages, made when first shown.
+    place_views: Vec<(Page, gpui::AnyView)>,
     /// The Linked Places page, made when first shown.
     linked: Option<Entity<crate::linked::LinkedView>>,
     /// The Packs page, made when first shown.
@@ -292,8 +353,10 @@ impl SettingsView {
                 this.rows.retain(|r| !gone(&r.id));
                 this.accounts.retain(|(id, _)| !gone(id));
                 this.hangars.retain(|(id, _)| !gone(id));
+                this.place_views
+                    .retain(|(pg, _)| pg.place().is_none_or(|id| !gone(id)));
                 let mut moved = false;
-                if let Page::Account(id) | Page::Browser(id) | Page::Hangar(id) = &this.page
+                if let Some(id) = this.page.place()
                     && gone(id)
                 {
                     this.page = Page::Places;
@@ -315,6 +378,7 @@ impl SettingsView {
             focus: cx.focus_handle(),
             accounts: vec![],
             hangars: vec![],
+            place_views: vec![],
             linked: None,
             sync_packs: None,
             fonts: None,
@@ -409,7 +473,7 @@ impl SettingsView {
         let arranged = self.arranged(cx);
         self.places.update(cx, |p, cx| p.arrange(&arranged, cx));
         self.rows = self.place_rows(window, cx);
-        if let Page::Account(id) | Page::Browser(id) | Page::Hangar(id) = &self.page
+        if let Some(id) = self.page.place()
             && self.places.read(cx).get(id).is_none()
         {
             self.page = Page::Places;
@@ -442,6 +506,40 @@ impl SettingsView {
         let view = cx.new(|cx| crate::syncpacks::SyncPacksView::new(places, cx));
         self.sync_packs = Some(view.clone());
         view
+    }
+
+    /// A place's page of its own, made when first shown and kept.
+    fn place_view(&mut self, page: Page, cx: &mut Context<Self>) -> Option<gpui::AnyView> {
+        if let Some((_, v)) = self.place_views.iter().find(|(pg, _)| *pg == page) {
+            return Some(v.clone());
+        }
+        let places = self.places.clone();
+        let view: gpui::AnyView = match &page {
+            Page::Templates(id) => cx
+                .new(|cx| crate::templates::TemplatesView::new(places, id, cx))
+                .into(),
+            Page::PlacePacks(id) => cx
+                .new(|cx| crate::placepacks::PlacePacksView::new(places, id, cx))
+                .into(),
+            Page::Teams(id) => cx
+                .new(|cx| crate::teamspage::TeamsView::new(places, id, cx))
+                .into(),
+            Page::Images(id) => cx
+                .new(|cx| crate::imagespage::ImagesView::new(places, id, cx))
+                .into(),
+            Page::Users(id) => cx
+                .new(|cx| crate::adminpages::UsersView::new(places, id, cx))
+                .into(),
+            Page::Workers(id) => cx
+                .new(|cx| crate::adminpages::WorkersView::new(places, id, cx))
+                .into(),
+            Page::Audit(id) => cx
+                .new(|cx| crate::adminpages::AuditView::new(places, id, cx))
+                .into(),
+            _ => return None,
+        };
+        self.place_views.push((page, view.clone()));
+        Some(view)
     }
 
     fn hangar(&mut self, place: &str, cx: &mut Context<Self>) -> Entity<ThisHangarView> {
@@ -478,7 +576,8 @@ impl Render for SettingsView {
         let w = (size.width - px(40.)).min(px(960.));
         let h = (size.height - px(70.)).min(px(660.));
         let crumb = match &self.page {
-            Page::Account(id) | Page::Browser(id) | Page::Hangar(id) => {
+            page if page.place().is_some() => {
+                let id = page.place().unwrap_or_default();
                 let name = self
                     .places
                     .read(cx)
@@ -600,7 +699,7 @@ impl SettingsView {
     fn tree(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let q = self.search.read(cx).value().to_string();
         let searching = !q.trim().is_empty();
-        let places: Vec<(String, String, bool, bool)> = self
+        let places: Vec<(String, String, bool, bool, bool)> = self
             .places
             .read(cx)
             .list()
@@ -611,6 +710,7 @@ impl SettingsView {
                     c.name.clone(),
                     matches!(s.connection, Connection::SignIn),
                     c.proxmox.is_some(),
+                    s.me.as_ref().is_some_and(|m| m.admin),
                 )
             })
             .collect();
@@ -623,8 +723,22 @@ impl SettingsView {
                 None,
             ),
         ];
-        for (id, name, signed_out, made) in places {
-            let mut pages = vec![Page::Account(id.clone()), Page::Browser(id.clone())];
+        for (id, name, signed_out, made, admin) in places {
+            let mut pages = vec![
+                Page::Account(id.clone()),
+                Page::Templates(id.clone()),
+                Page::PlacePacks(id.clone()),
+                Page::Teams(id.clone()),
+                Page::Images(id.clone()),
+            ];
+            if admin {
+                pages.extend([
+                    Page::Users(id.clone()),
+                    Page::Workers(id.clone()),
+                    Page::Audit(id.clone()),
+                ]);
+            }
+            pages.push(Page::Browser(id.clone()));
             if made {
                 pages.insert(0, Page::Hangar(id.clone()));
             }
@@ -676,6 +790,16 @@ impl SettingsView {
                     Page::Account(pl) => format!("settings-node-account-{pl}"),
                     Page::Hangar(pl) => format!("settings-node-hangar-{pl}"),
                     Page::Browser(pl) => format!("settings-node-browser-{pl}"),
+                    pg @ (Page::Templates(pl)
+                    | Page::PlacePacks(pl)
+                    | Page::Teams(pl)
+                    | Page::Images(pl)
+                    | Page::Users(pl)
+                    | Page::Workers(pl)
+                    | Page::Audit(pl)) => format!(
+                        "settings-node-{}-{pl}",
+                        pg.title().to_lowercase().replace(' ', "-")
+                    ),
                     Page::Linked => "settings-node-linked".into(),
                     Page::Packs => "settings-node-sync-packs".into(),
                     other => format!("settings-node-{}", other.title().to_lowercase()),
@@ -734,6 +858,10 @@ impl SettingsView {
             Page::Account(id) => self.account(&id, window, cx).into_any_element(),
             Page::Hangar(id) => self.hangar(&id, cx).into_any_element(),
             Page::Browser(id) => self.browser(&id, p, cx).into_any_element(),
+            page => match self.place_view(page, cx) {
+                Some(v) => v.into_any_element(),
+                None => div().into_any_element(),
+            },
         }
     }
 
