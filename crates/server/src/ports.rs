@@ -410,11 +410,12 @@ async fn dial(app: &Shared, worker: Uuid, env: Uuid, port: u16) -> Result<tunnel
     }
 }
 
-/// Accepts whatever certificate an environment's port 443 shows: it is
-/// the environment's own business, often self-signed, and the browser has
-/// been shown Hangar's.
+/// Accepts whatever certificate a server shows: an environment's port 443,
+/// which is the environment's own business, often self-signed, the
+/// browser having been shown Hangar's; and a linked place, which proves
+/// itself by its own key (`link`).
 #[derive(Debug)]
-struct AnyCertificate(Arc<rustls::crypto::CryptoProvider>);
+pub(crate) struct AnyCertificate(pub(crate) Arc<rustls::crypto::CryptoProvider>);
 
 impl rustls::client::danger::ServerCertVerifier for AnyCertificate {
     fn verify_server_cert(

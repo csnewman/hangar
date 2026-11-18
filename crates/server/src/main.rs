@@ -10,6 +10,7 @@ mod environments;
 mod fail;
 mod http;
 mod keys;
+mod link;
 mod listen;
 mod maintain;
 mod packs;
@@ -107,7 +108,24 @@ async fn run() -> Result<(), String> {
         ),
         None => None,
     };
-    let app = Arc::new(http::App::new(store, cfg, host_key.as_ref(), root, blobs));
+    let place = match link::Place::load(&store, cfg.sealer.as_deref()).await {
+        Ok(p) => Some(Arc::new(p)),
+        Err(e) => {
+            eprintln!("hangar-server: this place's link key: {e}; linking is off");
+            None
+        }
+    };
+    let app = Arc::new(http::App::new(
+        store,
+        cfg,
+        host_key.as_ref(),
+        root,
+        blobs,
+        place.clone(),
+    ));
+    if let Some(place) = place {
+        tokio::spawn(link::run(app.store.clone(), place, app.links_wake.clone()));
+    }
     if let (Some(ssh), Some(key)) = (&app.cfg.ssh, host_key) {
         tokio::spawn(sshgw::serve(app.clone(), ssh.listen.clone(), key));
     }

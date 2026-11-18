@@ -2,7 +2,9 @@
 //! UI on every other path, people's preferences, and the development
 //! stack's automatic sign-in.
 
-use hangar_suite::{ADMIN, ADMIN_PASSWORD, Server, body, clientapi, frontendapi, status};
+use hangar_suite::{
+    ADMIN, ADMIN_PASSWORD, Server, body, clientapi, eventually, frontendapi, status,
+};
 use serde_json::json;
 use sha2::Digest;
 
@@ -368,4 +370,117 @@ async fn an_administrator_without_a_password_sets_one() {
     })))
     .await
     .expect("changing it with the current one");
+}
+
+/// Two places link a person's accounts: each gives the other its key and
+/// address, the second takes the first's person, and each then reaches the
+/// other, proving itself by its key. A third person ID is refused once
+/// linked, and unlinking removes the link.
+#[tokio::test]
+async fn places_link_and_reach_each_other() {
+    let (Some(a), Some(b)) = (Server::start(), Server::start()) else {
+        return;
+    };
+    let ca = a.client(&a.token(&a.admin().await, "the app").await);
+    let cb = b.client(&b.token(&b.admin().await, "the app").await);
+    let la = ca.list_links().await.expect("a's links").into_inner();
+    let lb = cb.list_links().await.expect("b's links").into_inner();
+    assert!(la.allowed && la.items.is_empty());
+    assert_ne!(la.place.id, lb.place.id);
+    assert_ne!(la.person, lb.person);
+
+    ca.put_link(
+        &lb.place.id,
+        &body(json!({
+            "name": "B",
+            "public_key": lb.place.public_key,
+            "url": b.loopback_url(),
+            "person": la.person,
+        })),
+    )
+    .await
+    .expect("a links to b");
+    let waiting = eventually("a to find b not linked back", || async {
+        let l = ca.list_links().await.ok()?.into_inner();
+        l.items.into_iter().next()?.reach_error
+    })
+    .await;
+    assert_eq!(waiting, "it has not linked back to this place");
+
+    cb.put_link(
+        &la.place.id,
+        &body(json!({
+            "name": "A",
+            "public_key": la.place.public_key,
+            "url": a.loopback_url(),
+            "person": la.person,
+        })),
+    )
+    .await
+    .expect("b links to a");
+    for (who, c) in [("a", &ca), ("b", &cb)] {
+        let l = eventually(&format!("{who} to reach and be reached"), || async {
+            let l = c.list_links().await.ok()?.into_inner();
+            let link = l.items.into_iter().next()?;
+            (link.reached_at.is_some() && link.reach_error.is_none() && link.heard_at.is_some())
+                .then_some(link)
+        })
+        .await;
+        assert_eq!(l.name, if who == "a" { "B" } else { "A" });
+    }
+    let lb = cb.list_links().await.expect("b's links").into_inner();
+    assert_eq!(lb.person, la.person, "b takes a's person");
+
+    cb.put_link(
+        &la.place.id,
+        &body(json!({
+            "public_key": la.place.public_key,
+            "url": a.loopback_url(),
+            "person": "6f0a3d52-9a1c-4f7e-8b2d-0c5e4a1b9d33",
+        })),
+    )
+    .await
+    .expect("the only link may change person");
+    let third = cb
+        .put_link(
+            "0b6f2d7c-3e1a-4c9b-a5f8-2d7e9c1b4a60",
+            &body(json!({
+                "public_key": la.place.public_key,
+                "url": a.loopback_url(),
+                "person": la.person,
+            })),
+        )
+        .await;
+    assert_eq!(
+        client_status(third),
+        Some(409),
+        "a second link as another person"
+    );
+
+    ca.delete_link(&lb.place.id).await.expect("a unlinks b");
+    let l = ca.list_links().await.expect("a's links").into_inner();
+    assert!(l.items.is_empty());
+}
+
+/// A place whose administrators do not allow personal links says so, and
+/// refuses one.
+#[tokio::test]
+async fn a_place_may_refuse_personal_links() {
+    let Some(s) = Server::start_with(&[("HANGAR_PERSONAL_LINKS", "false".into())]) else {
+        return;
+    };
+    let c = s.client(&s.token(&s.admin().await, "the app").await);
+    let l = c.list_links().await.expect("links").into_inner();
+    assert!(!l.allowed);
+    let refused = c
+        .put_link(
+            "0b6f2d7c-3e1a-4c9b-a5f8-2d7e9c1b4a60",
+            &body(json!({
+                "public_key": l.place.public_key,
+                "url": "https://elsewhere.example",
+                "person": l.person,
+            })),
+        )
+        .await;
+    assert_eq!(client_status(refused), Some(403));
 }

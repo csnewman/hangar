@@ -31,6 +31,8 @@ pub enum Page {
     Terminal,
     Notifications,
     Places,
+    /// Which of the person's places are linked, and Link Places.
+    Linked,
     /// A Hangar the app made on a Proxmox: where it runs, its release.
     Hangar(String),
     /// The user's account at a place.
@@ -57,6 +59,7 @@ impl Page {
             Page::Terminal => "Terminal",
             Page::Notifications => "Notifications",
             Page::Places => "Places",
+            Page::Linked => "Linked Places",
             Page::Hangar(_) => "This Hangar",
             Page::Account(_) => "Account",
             Page::Browser(_) => "Web Pages",
@@ -128,6 +131,9 @@ impl Page {
                 "sign in",
                 "token",
                 "add a place",
+            ],
+            Page::Linked => &[
+                "link", "linked", "unlink", "share", "sync", "packs", "files", "keys", "person",
             ],
             Page::Hangar(_) => &[
                 "proxmox",
@@ -203,6 +209,8 @@ pub struct SettingsView {
     accounts: Vec<(String, Entity<AccountView>)>,
     /// Each made Hangar's page, made when first shown.
     hangars: Vec<(String, Entity<ThisHangarView>)>,
+    /// The Linked Places page, made when first shown.
+    linked: Option<Entity<crate::linked::LinkedView>>,
     /// The monospaced font families installed, found when the Terminal page
     /// is first shown.
     fonts: Option<Vec<String>>,
@@ -280,6 +288,7 @@ impl SettingsView {
             focus: cx.focus_handle(),
             accounts: vec![],
             hangars: vec![],
+            linked: None,
             fonts: None,
             _subs: subs,
         };
@@ -385,6 +394,18 @@ impl SettingsView {
         cx.emit(SettingsEvent::Close);
     }
 
+    fn linked(&mut self, cx: &mut Context<Self>) -> Entity<crate::linked::LinkedView> {
+        if let Some(v) = &self.linked {
+            return v.clone();
+        }
+        let places = self.places.clone();
+        let view = cx.new(|cx| crate::linked::LinkedView::new(places, cx));
+        // Its sheet is drawn over this window.
+        self._subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
+        self.linked = Some(view.clone());
+        view
+    }
+
     fn hangar(&mut self, place: &str, cx: &mut Context<Self>) -> Entity<ThisHangarView> {
         if let Some((_, v)) = self.hangars.iter().find(|(p, _)| p == place) {
             return v.clone();
@@ -428,7 +449,12 @@ impl Render for SettingsView {
                     .unwrap_or_default();
                 format!("{name} › {}", self.page.title())
             }
+            Page::Linked => format!("Yours everywhere › {}", self.page.title()),
             page => format!("App › {}", page.title()),
+        };
+        let sheet = match self.page {
+            Page::Linked => self.linked.as_ref().and_then(|l| l.read(cx).sheet()),
+            _ => None,
         };
         let body = self.page_body(&p, window, cx);
         v_flex()
@@ -445,6 +471,7 @@ impl Render for SettingsView {
             .rounded(px(10.))
             .shadow_lg()
             .overflow_hidden()
+            .relative()
             .text_size(px(12.5))
             .line_height(relative(1.45))
             .child(
@@ -509,6 +536,25 @@ impl Render for SettingsView {
                             .on_click(cx.listener(|this, _, window, cx| this.ok(window, cx))),
                     ),
             )
+            .when_some(sheet, |d, sheet| {
+                d.child(
+                    div()
+                        .id("link-sheet-scrim")
+                        .absolute()
+                        .inset_0()
+                        .bg(gpui::black().opacity(0.25))
+                        .occlude(),
+                )
+                .child(
+                    h_flex()
+                        .absolute()
+                        .top(px(30.))
+                        .left_0()
+                        .right_0()
+                        .justify_center()
+                        .child(sheet),
+                )
+            })
     }
 }
 
@@ -530,8 +576,15 @@ impl SettingsView {
                 )
             })
             .collect();
-        let mut groups: Vec<(String, String, Vec<Page>, Option<&'static str>)> =
-            vec![("app".into(), "App".into(), Page::APP.to_vec(), None)];
+        let mut groups: Vec<(String, String, Vec<Page>, Option<&'static str>)> = vec![
+            ("app".into(), "App".into(), Page::APP.to_vec(), None),
+            (
+                "yours".into(),
+                "Yours everywhere".into(),
+                vec![Page::Linked],
+                None,
+            ),
+        ];
         for (id, name, signed_out, made) in places {
             let mut pages = vec![Page::Account(id.clone()), Page::Browser(id.clone())];
             if made {
@@ -585,6 +638,7 @@ impl SettingsView {
                     Page::Account(pl) => format!("settings-node-account-{pl}"),
                     Page::Hangar(pl) => format!("settings-node-hangar-{pl}"),
                     Page::Browser(pl) => format!("settings-node-browser-{pl}"),
+                    Page::Linked => "settings-node-linked".into(),
                     other => format!("settings-node-{}", other.title().to_lowercase()),
                 };
                 let go = page.clone();
@@ -636,6 +690,7 @@ impl SettingsView {
             Page::Terminal => self.terminal(p, cx).into_any_element(),
             Page::Notifications => self.notifications(p, cx).into_any_element(),
             Page::Places => self.places_page(p, cx).into_any_element(),
+            Page::Linked => self.linked(cx).into_any_element(),
             Page::Account(id) => self.account(&id, window, cx).into_any_element(),
             Page::Hangar(id) => self.hangar(&id, cx).into_any_element(),
             Page::Browser(id) => self.browser(&id, p, cx).into_any_element(),

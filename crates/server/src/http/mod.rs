@@ -10,6 +10,7 @@ mod environments;
 mod frontend;
 mod images;
 mod keys;
+mod link;
 mod packs;
 mod signin;
 mod streams;
@@ -43,6 +44,10 @@ pub struct App {
     pub root: crate::root::Root,
     /// The registry's blob store, when it runs.
     pub blobs: Option<crate::blob::Blobs>,
+    /// This place as linked places know it, and what wakes its hellos to
+    /// them; none when its key could not be had.
+    pub place: Option<Arc<crate::link::Place>>,
+    pub links_wake: Arc<tokio::sync::Notify>,
 }
 
 impl App {
@@ -52,10 +57,13 @@ impl App {
         host_key: Option<&russh::keys::PrivateKey>,
         root: crate::root::Root,
         blobs: Option<crate::blob::Blobs>,
+        place: Option<Arc<crate::link::Place>>,
     ) -> App {
         App {
             root,
             blobs,
+            place,
+            links_wake: Arc::default(),
             store,
             cfg,
             rules: access::Rules::from_specs(),
@@ -105,6 +113,7 @@ pub fn router(app: Shared) -> Router {
                 .merge(signin::client()),
         )
         .nest("/api/worker/v1", worker::routes())
+        .nest("/api/link/v1", link::routes())
         .route_layer(axum::middleware::from_fn_with_state(
             app.clone(),
             access::enforce,
@@ -226,6 +235,12 @@ pub mod code {
     pub const WORKER_TOO_OLD: &str = "worker_too_old";
     /// The worker speaks a worker API newer than this server serves.
     pub const SERVER_TOO_OLD: &str = "server_too_old";
+    /// This place's administrators do not allow personal links.
+    pub const LINKS_NOT_ALLOWED: &str = "links_not_allowed";
+    /// The user is linked as another person already.
+    pub const PERSON_DIFFERS: &str = "person_differs";
+    /// Another user here is that person already.
+    pub const PERSON_TAKEN: &str = "person_taken";
 }
 
 /// The code a refusal with this status has unless it is given its own.

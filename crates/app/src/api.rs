@@ -240,6 +240,34 @@ impl Client {
         self.call(|c| c.change_password(&body))
     }
 
+    /// This place as linked places know it, the person the user is, and
+    /// the places the user's account here is linked with.
+    pub fn links(&self) -> Result<types::Links, Error> {
+        self.call(|c| c.list_links())
+    }
+
+    /// Links the user's account here with another place, as person.
+    pub fn put_link(
+        &self,
+        place: &str,
+        name: &str,
+        public_key: &str,
+        url: &str,
+        person: &str,
+    ) -> Result<types::Link, Error> {
+        let body = types::NewLink {
+            name: Some(name.to_string()),
+            public_key: public_key.to_string(),
+            url: url.to_string(),
+            person: person.to_string(),
+        };
+        self.call(|c| c.put_link(place, &body))
+    }
+
+    pub fn delete_link(&self, place: &str) -> Result<(), Error> {
+        self.call(|c| c.delete_link(place))
+    }
+
     pub fn login_keys(&self) -> Result<Vec<LoginKey>, Error> {
         let first = self.call(|c| c.list_login_keys())?;
         self.all(first)

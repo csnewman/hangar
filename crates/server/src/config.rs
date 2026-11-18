@@ -51,6 +51,10 @@ pub struct Config {
     /// for none), from the image repository `HANGAR_RELEASE_ISO_IMAGE`
     /// (Hangar's published one unless set) tagged with it.
     pub worker_release: Option<hangar_api::Release>,
+    /// Whether people may link their account here with their accounts in
+    /// other places (docs/places.md §4): unless `HANGAR_PERSONAL_LINKS` is
+    /// false.
+    pub personal_links: bool,
 }
 
 /// The administrator made at start when there is none by that name
@@ -492,6 +496,7 @@ impl Config {
             _ => None,
         };
         Ok(Config {
+            personal_links: var("HANGAR_PERSONAL_LINKS").as_deref() != Some("false"),
             edge,
             worker_release,
             auto_sign_in: var("HANGAR_DEV_AUTO_SIGN_IN"),

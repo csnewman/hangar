@@ -499,3 +499,28 @@ pub struct SignInGrant {
     pub approved_by: Option<Uuid>,
     pub denied: bool,
 }
+
+/// `link_persons`: the person a user is, where that is not their own ID.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkPerson {
+    pub user_id: Uuid,
+    pub person_id: Uuid,
+}
+
+/// `links`: a place a person's account here is linked with.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Link {
+    pub user_id: Uuid,
+    pub place_id: Uuid,
+    pub name: String,
+    /// Its Ed25519 public key, base64.
+    pub public_key: String,
+    /// Where this place dials it.
+    pub url: String,
+    pub created_at: DateTime<Utc>,
+    /// When this place last reached it, or why it could not.
+    pub reached_at: Option<DateTime<Utc>>,
+    pub reach_error: String,
+    /// When it last reached this place.
+    pub heard_at: Option<DateTime<Utc>>,
+}

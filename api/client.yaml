@@ -259,6 +259,58 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /me/links:
+    get:
+      operationId: listLinks
+      summary: >-
+        This place as linked places know it, the person the user is across
+        their linked places, and the places the user's account here is
+        linked with. Linked places share the person's own packs and their
+        files, personal templates, keys and settings.
+      responses:
+        "200":
+          description: This place and the user's links.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Links" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /me/links/{place}:
+    parameters:
+      - { name: place, in: path, required: true, schema: { type: string } }
+    put:
+      operationId: putLink
+      summary: >-
+        Link the user's account here with another place, by that place's ID
+        (the path), or change the link. The other place makes its half the
+        same way, naming this one. The user becomes the person given; a user
+        already linked as another person cannot be (person_differs, 409),
+        nor can a person another user here already is (person_taken, 409).
+        A place whose administrators do not allow personal links refuses
+        (links_not_allowed, 403).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewLink" }
+      responses:
+        "200":
+          description: The link.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Link" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteLink
+      summary: Unlink the user's account here from another place. What each place has is kept.
+      responses:
+        "204": { description: The link was removed. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /me/ssh-keys:
     get:
       operationId: listSSHKeys
@@ -912,7 +964,8 @@ components:
             environment_unreachable (503: its worker is reached, the
             environment is not), environment_not_placed (409),
             worker_too_old (409: the environment's worker cannot do it
-            until it is upgraded). A sign-in still waiting to be
+            until it is upgraded), links_not_allowed (403),
+            person_differs and person_taken (409). A sign-in still waiting to be
             approved answers 202 with sign_in_pending. More may come; treat
             one you do not know as its status's.
 
@@ -1167,6 +1220,79 @@ components:
         to:
           type: string
           description: A path on the server for the browser to go on to, such as /environments/ID; the web UI's start page unless set.
+
+    Links:
+      type: object
+      required: [place, person, allowed, items]
+      properties:
+        place: { $ref: "#/components/schemas/LinkPlace" }
+        person:
+          type: string
+          description: The person the user is in every place they link; their own ID until a link gives them another.
+        allowed:
+          type: boolean
+          description: Whether this place's administrators allow personal links.
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Link" }
+        next:
+          type: string
+          description: Absent; links come in one page.
+
+    LinkPlace:
+      type: object
+      description: This place, as the places linked with it know it.
+      required: [id, public_key, levels]
+      properties:
+        id: { type: string }
+        public_key:
+          type: string
+          description: Its Ed25519 public key, base64, by which it proves itself to linked places.
+        url:
+          type: string
+          description: Its public address, where linked places reach it; absent when it has none.
+        levels:
+          type: array
+          description: The link protocol levels it speaks, oldest and newest.
+          items: { type: integer }
+
+    NewLink:
+      type: object
+      required: [public_key, url, person]
+      properties:
+        name:
+          type: string
+          description: The name the person knows the other place by.
+        public_key:
+          type: string
+          description: The other place's Ed25519 public key, base64, as its listLinks gives it.
+        url:
+          type: string
+          description: Where this place reaches the other, its public address.
+        person:
+          type: string
+          description: The person the user is to be.
+
+    Link:
+      type: object
+      required: [place, name, url, public_key, created_at]
+      properties:
+        place: { type: string }
+        name: { type: string }
+        url: { type: string }
+        public_key: { type: string }
+        created_at: { type: string, format: date-time }
+        reached_at:
+          type: string
+          format: date-time
+          description: When this place last reached the other; absent when never.
+        reach_error:
+          type: string
+          description: Why this place could not reach the other when it last tried; absent when it did.
+        heard_at:
+          type: string
+          format: date-time
+          description: When the other place last reached this one; absent when never.
 
     SignInLink:
       type: object

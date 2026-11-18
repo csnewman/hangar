@@ -3,11 +3,11 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use hangar_openapi::clientapi::types;
 
-use super::{ApiError, Body, List, Shared, Signed, Via, spec};
+use super::{ApiError, App, Body, List, Shared, Signed, Via, spec};
 use crate::users;
 
 /// The versions of this API the server serves.
@@ -21,6 +21,121 @@ pub fn routes() -> Router<Shared> {
         .route("/me/sign-in-link", post(create_sign_in_link))
         .route("/me/tokens", get(list_tokens))
         .route("/me/tokens/{id}", delete(revoke_token))
+        .route("/me/links", get(list_links))
+        .route("/me/links/{place}", put(put_link).delete(delete_link))
+}
+
+/// The link API's view of a link.
+fn link_spec(l: crate::store::rows::Link) -> types::Link {
+    types::Link {
+        place: l.place_id.to_string(),
+        name: l.name,
+        url: l.url,
+        public_key: l.public_key,
+        created_at: l.created_at,
+        reached_at: l.reached_at,
+        reach_error: Some(l.reach_error).filter(|e| !e.is_empty()),
+        heard_at: l.heard_at,
+    }
+}
+
+fn this_place(app: &App) -> Result<&crate::link::Place, ApiError> {
+    app.place.as_deref().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this place has no link key; its log says why",
+        )
+    })
+}
+
+async fn list_links(State(app): State<Shared>, s: Signed) -> Result<Json<types::Links>, ApiError> {
+    let place = this_place(&app)?;
+    let mut tx = app.store.begin().await?;
+    let person = tx.person(s.principal.user_id).await?;
+    let links = tx.links(Some(s.principal.user_id)).await?;
+    Ok(Json(types::Links {
+        place: types::LinkPlace {
+            id: place.id.to_string(),
+            public_key: place.public_key(),
+            url: app.cfg.public.as_ref().map(|p| p.origin()),
+            levels: crate::link::LEVELS.iter().map(|&l| l.into()).collect(),
+        },
+        person: person.to_string(),
+        allowed: app.cfg.personal_links,
+        items: links.into_iter().map(link_spec).collect(),
+        next: None,
+    }))
+}
+
+async fn put_link(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(other): Path<String>,
+    Body(b): Body<types::NewLink>,
+) -> Result<Json<types::Link>, ApiError> {
+    if !app.cfg.personal_links {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "this place's administrators do not allow personal links",
+        )
+        .code(super::code::LINKS_NOT_ALLOWED));
+    }
+    let place = this_place(&app)?;
+    let invalid = |m: &str| ApiError::new(StatusCode::BAD_REQUEST, m);
+    let other = uuid::Uuid::parse_str(&other).map_err(|_| invalid("place is a place's ID"))?;
+    if other == place.id {
+        return Err(invalid("that is this place"));
+    }
+    let person =
+        uuid::Uuid::parse_str(&b.person).map_err(|_| invalid("person is a person's ID"))?;
+    if !crate::link::is_public_key(&b.public_key) {
+        return Err(invalid("public_key is an Ed25519 public key, base64"));
+    }
+    let url = b.url.trim().trim_end_matches('/').to_string();
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err(invalid("url is the place's address, https:// or http://"));
+    }
+    let link = crate::store::rows::Link {
+        user_id: s.principal.user_id,
+        place_id: other,
+        name: b.name.unwrap_or_default().trim().to_string(),
+        public_key: b.public_key,
+        url,
+        created_at: chrono::Utc::now(),
+        reached_at: None,
+        reach_error: String::new(),
+        heard_at: None,
+    };
+    let kept = crate::link::put(&app.store, &s.principal, &s.ip, link, person)
+        .await
+        .map_err(|e| match e {
+            crate::link::Unmade::Differs => ApiError::new(
+                StatusCode::CONFLICT,
+                "your account here is linked as another person; unlink it from its places first",
+            )
+            .code(super::code::PERSON_DIFFERS),
+            crate::link::Unmade::Taken => ApiError::new(
+                StatusCode::CONFLICT,
+                "another account here is linked as that person",
+            )
+            .code(super::code::PERSON_TAKEN),
+            crate::link::Unmade::Store(e) => e.into(),
+        })?;
+    app.links_wake.notify_one();
+    Ok(Json(link_spec(kept)))
+}
+
+async fn delete_link(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(other): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let other = uuid::Uuid::parse_str(&other).map_err(|_| ApiError::not_found("link"))?;
+    if crate::link::remove(&app.store, &s.principal, &s.ip, other).await? {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found("link"))
+    }
 }
 
 async fn version() -> Json<types::Version> {

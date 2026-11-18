@@ -153,6 +153,11 @@ impl Server {
         format!("http://{HOST}:{}", self.port)
     }
 
+    /// Its address on the loopback, by which another server reaches it.
+    pub fn loopback_url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+
     /// Where its SSH gateway listens.
     pub fn ssh_addr(&self) -> SocketAddr {
         SocketAddr::from(([127, 0, 0, 1], self.ssh_port))

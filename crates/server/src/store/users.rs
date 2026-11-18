@@ -220,6 +220,8 @@ impl Tx {
                 tx.work.ssh_keys.retain(|k| k.user_id != id);
                 tx.work.ssh_login_keys.retain(|k| k.user_id != id);
                 tx.work.sign_in_grants.retain(|g| g.approved_by != Some(id));
+                tx.work.link_persons.retain(|p| p.user_id != id);
+                tx.work.links.retain(|l| l.user_id != id);
                 super::packs::json_delete_owner(&mut tx.work, id);
                 Ok(Some(u.username))
             }

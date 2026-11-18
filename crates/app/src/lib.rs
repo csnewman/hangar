@@ -39,6 +39,8 @@ pub mod languages;
 pub mod latency;
 pub mod layout;
 pub mod lineops;
+pub mod linked;
+pub mod linking;
 pub mod logview;
 pub mod lspedit;
 pub mod lspops;
