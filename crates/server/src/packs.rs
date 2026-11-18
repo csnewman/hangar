@@ -52,7 +52,15 @@ pub struct Path {
     /// Keeps every file under it, in every copy, from environments given
     /// no sensitive files.
     pub sensitive: bool,
+    /// How often a file under it written in bursts is sent to linked
+    /// places: at most once in so many seconds, every change as written
+    /// for 0; none is as the path it is in says, else once a second.
+    pub send_every: Option<i32>,
 }
+
+/// The longest a path's files wait to be sent to linked places, in
+/// seconds.
+pub const MAX_SEND_EVERY: i32 = 3600;
 
 /// The built-in profile's paths as Hangar ships them (migrations 0009 and
 /// 0011), which an admin may return it to.
@@ -124,6 +132,7 @@ pub fn profile_defaults() -> Vec<Path> {
         .map(|p| Path {
             path: p.to_string(),
             sensitive: SENSITIVE.contains(p),
+            send_every: None,
         })
         .collect()
 }
@@ -217,6 +226,36 @@ pub fn routed(paths: &[String]) -> Vec<String> {
     out
 }
 
+/// How often a file of a copy written in bursts is sent to linked places,
+/// in seconds: as the innermost of the pack's paths holding it that says,
+/// else once a second. rel is its path in the copy's directory.
+pub fn send_every(paths: &[Path], rel: &str) -> i32 {
+    let key = if rel.starts_with(HOME) {
+        rel.to_string()
+    } else {
+        format!("/{rel}")
+    };
+    paths
+        .iter()
+        .filter(|s| !s.path.starts_with(EXCLUDE) && under(&key, &s.path))
+        .filter_map(|s| Some((s.path.trim_end_matches('/').len(), s.send_every?)))
+        .max_by_key(|(len, _)| *len)
+        .map_or(1, |(_, n)| n)
+}
+
+/// A pack's paths, by pack.
+pub async fn all_paths(tx: &mut Tx) -> StoreResult<HashMap<Uuid, Vec<Path>>> {
+    let mut out: HashMap<Uuid, Vec<Path>> = HashMap::new();
+    for p in tx.pack_paths().await? {
+        out.entry(p.pack_id).or_default().push(Path {
+            path: p.path,
+            sensitive: p.sensitive,
+            send_every: p.send_every,
+        });
+    }
+    Ok(out)
+}
+
 /// Whether a file is under one of the sensitive paths.
 fn sensitive(paths: &[Path], p: &str) -> bool {
     paths
@@ -239,14 +278,23 @@ fn check_paths(input: &[Path]) -> fail::Result<Vec<Path>> {
         let mut p = Path {
             path: p.path.trim().to_string(),
             sensitive: p.sensitive,
+            send_every: p.send_every,
         };
         check_path(&p.path).or_else(fail::invalid)?;
+        if p.send_every.is_some_and(|n| !(0..=MAX_SEND_EVERY).contains(&n)) {
+            return fail::invalid(format!(
+                "{}: a file is sent at most once in {MAX_SEND_EVERY} seconds",
+                p.path
+            ));
+        }
         if let Some(o) = out.iter_mut().find(|q| q.path == p.path) {
             o.sensitive = o.sensitive || p.sensitive;
+            o.send_every = o.send_every.or(p.send_every);
             continue;
         }
         if p.path.starts_with(EXCLUDE) {
             p.sensitive = false;
+            p.send_every = None;
         }
         out.push(p);
     }
@@ -334,6 +382,7 @@ impl World {
             paths.entry(p.pack_id).or_default().push(Path {
                 path: p.path,
                 sensitive: p.sensitive,
+                send_every: p.send_every,
             });
         }
         for v in paths.values_mut() {
@@ -627,6 +676,7 @@ fn rows_of(pack: Uuid, paths: &[Path]) -> Vec<PackPath> {
             pack_id: pack,
             path: p.path.clone(),
             sensitive: p.sensitive,
+            send_every: p.send_every,
         })
         .collect()
 }
@@ -663,6 +713,8 @@ pub async fn create_pack(
         squash: input.squash.clone(),
         created_at: now,
         updated_at: now,
+        same_name: None,
+        merged: vec![],
     };
     if !tx.put_pack(&k, true).await? {
         return fail::invalid(format!("its owner already has a pack named {}", input.name));

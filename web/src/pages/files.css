@@ -21,6 +21,14 @@
   text-align: center;
 }
 
+.files-paths .files-send {
+  width: 170px;
+}
+
+.files-paths .files-send select {
+  width: 100%;
+}
+
 .files-paths .files-remove {
   width: 32px;
   padding-right: 0;

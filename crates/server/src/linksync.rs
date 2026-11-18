@@ -77,11 +77,12 @@ const LOGIN_KEY: &str = "login_key";
 const SSH_KEY: &str = "ssh_key";
 const PACK: &str = "pack";
 const COPY: &str = "copy";
+const SENDING: &str = "sending";
 
 /// The kinds of record this place holds: SSH keys only with a secret key
 /// to seal them.
 fn kinds(here: &Here) -> Vec<&'static str> {
-    let mut k = vec![THEME, LOGIN_KEY, PACK, COPY];
+    let mut k = vec![THEME, LOGIN_KEY, PACK, COPY, SENDING];
     if here.sealer.is_some() {
         k.push(SSH_KEY);
     }
@@ -161,6 +162,14 @@ async fn snapshot(
     {
         out.insert((THEME.into(), THEME.into()), json!({ "theme": u.theme }));
     }
+    // No limit is no record, as the default theme is none.
+    let bandwidth = tx.link_bandwidth(user).await?;
+    if bandwidth > 0 {
+        out.insert(
+            (SENDING.into(), SENDING.into()),
+            json!({ "bandwidth": bandwidth }),
+        );
+    }
     for k in tx.login_keys(user).await? {
         out.insert(
             (LOGIN_KEY.into(), k.fingerprint.clone()),
@@ -203,22 +212,33 @@ async fn snapshot(
         if !own_pack(&p, user) {
             continue;
         }
-        let mut ps: Vec<(String, bool)> = paths
-            .iter()
-            .filter(|x| x.pack_id == p.id)
-            .map(|x| (x.path.clone(), x.sensitive))
+        let mut ps: Vec<&PackPath> = paths.iter().filter(|x| x.pack_id == p.id).collect();
+        ps.sort_by(|a, b| a.path.cmp(&b.path));
+        // A path's send rule is written only where it has one, so a pack
+        // without any reads as places of an older build write it.
+        let ps: Vec<Value> = ps
+            .into_iter()
+            .map(|x| match x.send_every {
+                Some(n) => json!([x.path, x.sensitive, n]),
+                None => json!([x.path, x.sensitive]),
+            })
             .collect();
-        ps.sort();
-        out.insert(
-            (PACK.into(), p.id.to_string()),
-            json!({
-                "name": p.name,
-                "description": p.description,
-                "attach": p.attach,
-                "squash": p.squash,
-                "paths": ps,
-            }),
-        );
+        let mut body = json!({
+            "name": p.name,
+            "description": p.description,
+            "attach": p.attach,
+            "squash": p.squash,
+            "paths": ps,
+        });
+        if let Some(o) = p.same_name {
+            body["same_name"] = json!(o.to_string());
+        }
+        if !p.merged.is_empty() {
+            let mut m: Vec<String> = p.merged.iter().map(Uuid::to_string).collect();
+            m.sort();
+            body["merged"] = json!(m);
+        }
+        out.insert((PACK.into(), p.id.to_string()), body);
     }
     Ok(out)
 }
@@ -462,6 +482,11 @@ async fn apply(
             tx.set_theme(user, &theme).await?;
             Ok(true)
         }
+        SENDING => {
+            let bandwidth = body.map_or(0, |b| b["bandwidth"].as_i64().unwrap_or(0).max(0));
+            tx.set_link_bandwidth(user, bandwidth).await?;
+            Ok(true)
+        }
         LOGIN_KEY => {
             let existing = tx
                 .login_keys(user)
@@ -575,14 +600,24 @@ async fn apply(
                 squash,
                 created_at: existing.as_ref().map_or(now, |p| p.created_at),
                 updated_at: now,
+                same_name: b["same_name"].as_str().and_then(|s| Uuid::parse_str(s).ok()),
+                merged: b["merged"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| Uuid::parse_str(x.as_str()?).ok())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             };
             if pack.name.trim().is_empty() {
                 return Ok(false);
             }
             // Another of the person's packs may have the name. The one of
             // the greater ID is renamed, the same way in every place, so
-            // the places agree on both. Looked for first: Postgres ends a
-            // transaction whose write breaks the name's uniqueness.
+            // the places agree on both, and marked for the person to merge
+            // or keep apart. Looked for first: Postgres ends a transaction
+            // whose write breaks the name's uniqueness.
             let lower = pack.name.to_lowercase();
             let clash = packs
                 .iter()
@@ -607,6 +642,7 @@ async fn apply(
                     let renamed = Pack {
                         name: free,
                         updated_at: now,
+                        same_name: Some(pack_id),
                         ..other
                     };
                     if !tx.put_pack(&renamed, false).await? {
@@ -614,6 +650,7 @@ async fn apply(
                     }
                 } else {
                     pack.name = free;
+                    pack.same_name = Some(other.id);
                 }
             }
             if !tx.put_pack(&pack, existing.is_none()).await? {
@@ -628,6 +665,10 @@ async fn apply(
                                 pack_id,
                                 path: p[0].as_str()?.to_string(),
                                 sensitive: p[1].as_bool().unwrap_or(false),
+                                send_every: p[2]
+                                    .as_i64()
+                                    .filter(|n| (0..=i64::from(crate::packs::MAX_SEND_EVERY)).contains(n))
+                                    .map(|n| n as i32),
                             })
                         })
                         .filter(|p| !p.path.is_empty())

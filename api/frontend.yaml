@@ -1892,6 +1892,15 @@ components:
           description: >-
             Every file under it, in every copy, is kept from environments
             given no sensitive files.
+        send_every:
+          type: integer
+          minimum: 0
+          maximum: 3600
+          description: >-
+            How often a file under it that is written in bursts is sent to
+            the owner's linked places: at most once in so many seconds, or
+            every change as it is written for 0. Without it, as the path
+            holding it says, else at most once a second.
 
     PackAttach:
       type: string

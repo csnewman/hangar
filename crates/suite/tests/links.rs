@@ -473,3 +473,109 @@ async fn a_file_an_environment_writes_reaches_the_linked_place() {
     })
     .await;
 }
+
+/// The person's own copy of a pack in a place, made if it is not yet.
+async fn own_copy(p: &Place, pack: &str) -> String {
+    p.admin
+        .list_copies(pack)
+        .await
+        .expect("the pack's copies")
+        .into_inner()
+        .into_iter()
+        .find(|c| c.personal)
+        .expect("one's own copy")
+        .id
+}
+
+/// A file written again within its path's wait of its last send waits:
+/// what reaches the linked place at the end of the wait is the file as it
+/// is then, and nothing between.
+#[tokio::test]
+async fn a_file_written_in_a_burst_is_sent_once_its_wait_ends() {
+    let (Some(a), Some(b)) = (place().await, place().await) else {
+        return;
+    };
+    let pack = a
+        .admin
+        .create_pack(&body(json!({
+            "name": "notes",
+            "attach": "owner",
+            "paths": [{ "path": "~/notes/", "sensitive": false, "send_every": 3 }],
+        })))
+        .await
+        .expect("a pack")
+        .into_inner();
+    link(&a, &b).await;
+    let rule = eventually("b to hold the pack and its path's wait", || async {
+        let k = b.admin.get_pack(&pack.id).await.ok()?.into_inner();
+        k.paths.first()?.send_every
+    })
+    .await;
+    assert_eq!(rule, 3);
+    let (ca, cb) = (own_copy(&a, &pack.id).await, own_copy(&b, &pack.id).await);
+    let (a, b) = (&a, &b);
+
+    put(a, &ca, "~/notes/todo", "one\n").await;
+    eventually("b to take the first write", || async {
+        (content(b, &cb, "~/notes/todo").await? == "one\n").then_some(())
+    })
+    .await;
+    put(a, &ca, "~/notes/todo", "two\n").await;
+    put(a, &ca, "~/notes/todo", "three\n").await;
+    let written = std::time::Instant::now();
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    assert_eq!(
+        content(b, &cb, "~/notes/todo").await.as_deref(),
+        Some("one\n"),
+        "the later writes wait"
+    );
+    eventually("b to take the last write once the wait ends", || async {
+        (content(b, &cb, "~/notes/todo").await? == "three\n").then_some(())
+    })
+    .await;
+    assert!(
+        written.elapsed() > std::time::Duration::from_secs(1),
+        "sent at the end of the wait"
+    );
+}
+
+/// A bandwidth limit set in one place reaches the other, and holds a
+/// file's pieces to it: the second piece waits for the first's time.
+#[tokio::test]
+async fn a_bandwidth_limit_reaches_every_place_and_paces_files() {
+    let (Some(a), Some(b)) = (place().await, place().await) else {
+        return;
+    };
+    link(&a, &b).await;
+    a.client
+        .set_link_settings(&clientapi::types::LinkSettings { bandwidth: 400_000 })
+        .await
+        .expect("a limit");
+    eventually("b to hold the limit", || async {
+        let l = b.client.list_links().await.ok()?.into_inner();
+        (l.bandwidth == Some(400_000)).then_some(())
+    })
+    .await;
+    let (ca, cb) = (profile_copy(&a).await, profile_copy(&b).await);
+    let big: String = "0123456789abcdef".repeat(100_000);
+    let started = std::time::Instant::now();
+    put(&a, &ca, "~/.netrc", &big).await;
+    eventually("b to take the file", || async {
+        (content(&b, &cb, "~/.netrc").await? == big).then_some(())
+    })
+    .await;
+    assert!(
+        started.elapsed() > std::time::Duration::from_secs(2),
+        "a MiB at 400 kB a second takes over two seconds"
+    );
+
+    b.client
+        .set_link_settings(&clientapi::types::LinkSettings { bandwidth: 0 })
+        .await
+        .expect("no limit");
+    eventually("a to drop the limit", || async {
+        let l = a.client.list_links().await.ok()?.into_inner();
+        l.bandwidth.is_none().then_some(())
+    })
+    .await;
+}

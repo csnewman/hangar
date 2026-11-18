@@ -796,6 +796,7 @@ fn outbox(
     let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<Job>();
     tokio::spawn(async move {
         let mut queue: VecDeque<Job> = VecDeque::new();
+        let mut pacer = Pacer::default();
         let add = |queue: &mut VecDeque<Job>, j: Job| match queue
             .iter_mut()
             .find(|q| q.copy == j.copy && q.path == j.path)
@@ -816,9 +817,12 @@ fn outbox(
             let Some(job) = queue.pop_front() else {
                 continue;
             };
+            pacer.read(&app, link.user_id).await;
             match crate::linkfiles::read(&app, link.user_id, &job).await {
                 Ok(Some((piece, data))) => {
-                    if let Err(e) = send_file(&place, person, &link, &tx, piece, &data).await {
+                    if let Err(e) =
+                        send_file(&place, person, &link, &tx, &mut pacer, piece, &data).await
+                    {
                         if e.is_empty() {
                             return;
                         }
@@ -833,6 +837,50 @@ fn outbox(
     jobs_tx
 }
 
+/// How often a connection's file sender reads the person's bandwidth
+/// limit again.
+const BANDWIDTH_READ: Duration = Duration::from_secs(2);
+
+/// Keeps a connection's files to the person's bandwidth limit: each piece
+/// waits until the bytes sent before it have had their time.
+#[derive(Default)]
+struct Pacer {
+    /// Bytes a second; 0 is no limit.
+    bandwidth: i64,
+    read: Option<Instant>,
+    next: Option<Instant>,
+}
+
+impl Pacer {
+    async fn read(&mut self, app: &App, user: Uuid) {
+        if self.read.is_some_and(|r| r.elapsed() < BANDWIDTH_READ) {
+            return;
+        }
+        let read = async {
+            let mut tx = app.store.begin().await?;
+            tx.link_bandwidth(user).await
+        };
+        match read.await {
+            Ok(b) => self.bandwidth = b,
+            Err(e) => eprintln!("hangar-server: reading a link's bandwidth limit: {e}"),
+        }
+        self.read = Some(Instant::now());
+    }
+
+    async fn wait(&mut self, bytes: usize) {
+        if self.bandwidth <= 0 {
+            self.next = None;
+            return;
+        }
+        if let Some(next) = self.next {
+            tokio::time::sleep_until(next).await;
+        }
+        let start = self.next.map_or(Instant::now(), |n| n.max(Instant::now()));
+        self.next =
+            Some(start + Duration::from_secs_f64(bytes as f64 / self.bandwidth as f64));
+    }
+}
+
 /// Sends a file in pieces, or its version alone; an empty error when the
 /// connection has ended.
 async fn send_file(
@@ -840,6 +888,7 @@ async fn send_file(
     person: Uuid,
     link: &Link,
     tx: &mpsc::Sender<Frame>,
+    pacer: &mut Pacer,
     mut piece: FilePiece,
     data: &[u8],
 ) -> Result<(), String> {
@@ -859,6 +908,7 @@ async fn send_file(
             &piece,
             bytes,
         )?;
+        pacer.wait(frame.len()).await;
         if tx.send(Frame::Binary(frame)).await.is_err() {
             return Err(String::new());
         }

@@ -223,6 +223,7 @@ impl Tx {
                 tx.work.link_persons.retain(|p| p.user_id != id);
                 tx.work.links.retain(|l| l.user_id != id);
                 tx.work.link_records.retain(|r| r.user_id != id);
+                tx.work.link_settings.retain(|s| s.user_id != id);
                 super::packs::json_delete_owner(&mut tx.work, id);
                 Ok(Some(u.username))
             }

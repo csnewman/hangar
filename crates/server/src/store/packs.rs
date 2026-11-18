@@ -10,8 +10,8 @@ use super::rows::{Conflict, Copy, EnvironmentCopy, Pack, PackDefault, PackPath};
 use super::signals::Signal;
 use super::{Backend, Result, Tx};
 
-const PACK_COLUMNS: &str =
-    "id, name, description, owner_id, team_id, builtin, attach, squash, created_at, updated_at";
+const PACK_COLUMNS: &str = "id, name, description, owner_id, team_id, builtin, attach, squash, \
+     created_at, updated_at, same_name, merged";
 const COPY_COLUMNS: &str = "id, pack_id, owner_id, team_id, personal, name, created_at, updated_at";
 
 fn pack(r: &sqlx::postgres::PgRow) -> Result<Pack> {
@@ -26,6 +26,8 @@ fn pack(r: &sqlx::postgres::PgRow) -> Result<Pack> {
         squash: r.try_get("squash")?,
         created_at: r.try_get("created_at")?,
         updated_at: r.try_get("updated_at")?,
+        same_name: r.try_get("same_name")?,
+        merged: r.try_get("merged")?,
     })
 }
 
@@ -107,18 +109,21 @@ impl Tx {
 
     pub async fn pack_paths(&mut self) -> Result<Vec<PackPath>> {
         match &mut self.inner {
-            Backend::Pg(tx) => sqlx::query("SELECT pack_id, path, sensitive FROM pack_paths")
-                .fetch_all(&mut **tx)
-                .await?
-                .iter()
-                .map(|r| {
-                    Ok(PackPath {
-                        pack_id: r.try_get(0)?,
-                        path: r.try_get(1)?,
-                        sensitive: r.try_get(2)?,
+            Backend::Pg(tx) => {
+                sqlx::query("SELECT pack_id, path, sensitive, send_every FROM pack_paths")
+                    .fetch_all(&mut **tx)
+                    .await?
+                    .iter()
+                    .map(|r| {
+                        Ok(PackPath {
+                            pack_id: r.try_get(0)?,
+                            path: r.try_get(1)?,
+                            sensitive: r.try_get(2)?,
+                            send_every: r.try_get(3)?,
+                        })
                     })
-                })
-                .collect(),
+                    .collect()
+            }
             Backend::Json(tx) => Ok(tx.work.pack_paths.clone()),
         }
     }
@@ -259,10 +264,11 @@ impl Tx {
         let done = match &mut self.inner {
             Backend::Pg(tx) => {
                 let q = if new {
-                    "INSERT INTO packs (id, name, description, owner_id, team_id, builtin, attach, squash, created_at, updated_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
+                    "INSERT INTO packs (id, name, description, owner_id, team_id, builtin, attach, squash, created_at, updated_at, same_name, merged)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"
                 } else {
-                    "UPDATE packs SET name = $2, description = $3, attach = $7, squash = $8, updated_at = $10
+                    "UPDATE packs SET name = $2, description = $3, attach = $7, squash = $8, updated_at = $10,
+                        same_name = $11, merged = $12
                      WHERE id = $1 AND (owner_id IS NOT DISTINCT FROM $4) AND (team_id IS NOT DISTINCT FROM $5)
                         AND builtin = $6 AND created_at = $9"
                 };
@@ -277,6 +283,8 @@ impl Tx {
                     .bind(&k.squash)
                     .bind(k.created_at)
                     .bind(k.updated_at)
+                    .bind(k.same_name)
+                    .bind(&k.merged)
                     .execute(&mut **tx)
                     .await;
                 match r {
@@ -319,13 +327,15 @@ impl Tx {
                     .await?;
                 let ps: Vec<&str> = paths.iter().map(|p| p.path.as_str()).collect();
                 let ss: Vec<bool> = paths.iter().map(|p| p.sensitive).collect();
+                let es: Vec<Option<i32>> = paths.iter().map(|p| p.send_every).collect();
                 sqlx::query(
-                    "INSERT INTO pack_paths (pack_id, path, sensitive)
-                     SELECT $1, p, s FROM unnest($2::text[], $3::boolean[]) AS x (p, s)",
+                    "INSERT INTO pack_paths (pack_id, path, sensitive, send_every)
+                     SELECT $1, p, s, e FROM unnest($2::text[], $3::boolean[], $4::integer[]) AS x (p, s, e)",
                 )
                 .bind(pack)
                 .bind(&ps)
                 .bind(&ss)
+                .bind(&es)
                 .execute(&mut **tx)
                 .await?;
             }

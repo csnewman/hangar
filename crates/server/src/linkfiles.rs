@@ -174,14 +174,22 @@ pub struct Job {
     pub content: bool,
 }
 
-/// What this place keeps of a file: its version, and how the file was
-/// when last looked at, so an unchanged file is not read again.
+/// What this place keeps of a file: its version, how the file was when
+/// last looked at, so an unchanged file is not read again, and when this
+/// place last made a version of it (milliseconds), so a file written in
+/// bursts is not sent with every write.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Kept {
     #[serde(flatten)]
     v: FileVersion,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     seen: Option<Seen>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    made: i64,
+}
+
+fn is_zero(n: &i64) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -219,6 +227,9 @@ pub struct Replaced {
 #[derive(Default)]
 pub struct Files {
     dirty: Mutex<HashSet<Uuid>>,
+    /// Copies with a file changed too soon after its last version to be
+    /// sent, and when to look at them again (milliseconds).
+    later: Mutex<HashMap<Uuid, i64>>,
     wake: Notify,
     locks: Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>,
 }
@@ -230,6 +241,18 @@ impl Files {
         let before = d.len();
         d.extend(copies);
         if d.len() > before {
+            self.wake.notify_one();
+        }
+    }
+
+    /// Has a copy looked at again at the time given, or sooner if it was
+    /// to be already.
+    fn later(&self, copy: Uuid, at: Option<i64>) {
+        let Some(at) = at else { return };
+        let mut l = self.later.lock().unwrap();
+        let e = l.entry(copy).or_insert(at);
+        if at <= *e {
+            *e = at;
             self.wake.notify_one();
         }
     }
@@ -311,13 +334,35 @@ fn now_ms() -> i64 {
     Utc::now().timestamp_millis()
 }
 
+/// How long this place waits between versions it makes of a file, in
+/// milliseconds, by its path in the copy; with none, every change found
+/// is a version at once.
+type Wait<'a> = Option<&'a dyn Fn(&str) -> i64>;
+
+/// Each file's wait as its pack's paths say.
+fn waits(paths: &[crate::packs::Path]) -> impl Fn(&str) -> i64 + '_ {
+    move |rel| i64::from(crate::packs::send_every(paths, rel)) * 1000
+}
+
+/// What a scan found: the paths changed, and when to look again for the
+/// changes it left waiting, if any.
+#[derive(Default)]
+struct Scanned {
+    changed: Vec<String>,
+    due: Option<i64>,
+}
+
 /// Looks for the changes made here to a copy's files since it was last
-/// looked at, each a new version from this place; gives the paths
-/// changed.
-fn scan(root: &Root, place: Uuid, copy: Uuid, st: &mut State) -> Result<Vec<String>, String> {
+/// looked at, each a new version from this place, but a file's change
+/// made within its wait of its last version: that waits, and is read when
+/// the wait ends, so a file written in bursts is sent at most once a wait,
+/// as it is at the end of it.
+fn scan(root: &Root, place: Uuid, copy: Uuid, st: &mut State, wait: Wait) -> Result<Scanned, String> {
     let files = root.files(&copy.to_string()).map_err(io)?;
     let mut present = HashSet::new();
     let mut changed = vec![];
+    let mut due: Option<i64> = None;
+    let now = now_ms();
     for (rel, info) in files {
         if !valid(&rel) {
             continue;
@@ -337,6 +382,13 @@ fn scan(root: &Root, place: Uuid, copy: Uuid, st: &mut State) -> Result<Vec<Stri
             .is_some_and(|k| !k.v.deleted && k.seen == Some(seen))
         {
             continue;
+        }
+        if let (Some(wait), Some(k)) = (wait, known.as_ref().filter(|k| !k.v.deleted)) {
+            let ms = wait(&rel);
+            if ms > 0 && now < k.made + ms {
+                due = Some(due.map_or(k.made + ms, |d| d.min(k.made + ms)));
+                continue;
+            }
         }
         let data = match root.read(&file_path(copy, &rel)) {
             Ok(d) => d,
@@ -370,11 +422,11 @@ fn scan(root: &Root, place: Uuid, copy: Uuid, st: &mut State) -> Result<Vec<Stri
                     deleted: false,
                 },
                 seen: Some(seen),
+                made: now,
             },
         );
         changed.push(rel);
     }
-    let now = now_ms();
     for (rel, k) in st.files.iter_mut() {
         if k.v.deleted || present.contains(rel) {
             continue;
@@ -386,12 +438,13 @@ fn scan(root: &Root, place: Uuid, copy: Uuid, st: &mut State) -> Result<Vec<Stri
         k.v.size = 0;
         k.v.deleted = true;
         k.seen = None;
+        k.made = now;
         changed.push(rel.clone());
     }
     let cutoff = now - DELETED_DAYS * 86_400_000;
     st.files
         .retain(|_, k| !(k.v.deleted && k.v.time() < cutoff));
-    Ok(changed)
+    Ok(Scanned { changed, due })
 }
 
 /// Keeps a version of a file that another place's change replaced.
@@ -512,9 +565,30 @@ pub async fn run(app: Arc<App>, place: Uuid) {
             let woken = app.link_files.wake.notified();
             tokio::pin!(woken);
             woken.as_mut().enable();
+            let now = now_ms();
+            let next = {
+                let mut later = app.link_files.later.lock().unwrap();
+                let due: Vec<Uuid> = later
+                    .iter()
+                    .filter(|(_, at)| **at <= now)
+                    .map(|(c, _)| *c)
+                    .collect();
+                for c in &due {
+                    later.remove(c);
+                }
+                app.link_files.dirty.lock().unwrap().extend(due);
+                later.values().min().copied()
+            };
             let d: Vec<Uuid> = app.link_files.dirty.lock().unwrap().drain().collect();
             if d.is_empty() {
-                woken.await;
+                match next {
+                    Some(at) => {
+                        let ms = u64::try_from(at - now).unwrap_or(0).max(1);
+                        let _ = tokio::time::timeout(std::time::Duration::from_millis(ms), woken)
+                            .await;
+                    }
+                    None => woken.await,
+                }
                 continue;
             }
             d
@@ -527,8 +601,8 @@ pub async fn run(app: Arc<App>, place: Uuid) {
 
 /// Scans the copies given that are linked, and has what changed sent.
 async fn look(app: &App, place: Uuid, copies: &[Uuid]) -> Result<(), String> {
-    let mut whose: HashMap<Uuid, Vec<(String, Uuid)>> = HashMap::new();
-    {
+    let mut whose: HashMap<Uuid, Vec<(String, Uuid, Uuid)>> = HashMap::new();
+    let paths = {
         let mut tx = app.store.begin().await.map_err(store_err)?;
         let users: HashSet<Uuid> = tx
             .linked_users()
@@ -550,21 +624,24 @@ async fn look(app: &App, place: Uuid, copies: &[Uuid]) -> Result<(), String> {
                 .into_iter()
                 .find(|l| l.copy == Some(*id))
             {
-                whose.entry(user).or_default().push((l.key, *id));
+                whose.entry(user).or_default().push((l.key, *id, l.pack));
             }
         }
-    }
+        crate::packs::all_paths(&mut tx).await.map_err(store_err)?
+    };
     for (user, copies) in whose {
         let _held = app.link_files.lock(user).await;
         let mut jobs = vec![];
-        for (key, copy) in copies {
+        for (key, copy, pack) in copies {
+            let ps = paths.get(&pack).map(Vec::as_slice).unwrap_or_default();
             let changed = tokio::task::block_in_place(|| {
                 let mut st: State = load(&app.root, &state_path(copy))?;
-                let changed = scan(&app.root, place, copy, &mut st)?;
-                if !changed.is_empty() {
+                let found = scan(&app.root, place, copy, &mut st, Some(&waits(ps)))?;
+                if !found.changed.is_empty() {
                     save(&app.root, &state_path(copy), &st)?;
                 }
-                Ok::<_, String>(changed)
+                app.link_files.later(copy, found.due);
+                Ok::<_, String>(found.changed)
             })?;
             jobs.extend(changed.into_iter().map(|path| Job {
                 copy: key.clone(),
@@ -587,9 +664,10 @@ pub async fn versions(
     place: Uuid,
     user: Uuid,
 ) -> Result<(FileVersions, Vec<Job>), String> {
-    let all = {
+    let (all, paths) = {
         let mut tx = app.store.begin().await.map_err(store_err)?;
-        linked(&mut tx, user).await.map_err(store_err)?
+        let all = linked(&mut tx, user).await.map_err(store_err)?;
+        (all, crate::packs::all_paths(&mut tx).await.map_err(store_err)?)
     };
     let _held = app.link_files.lock(user).await;
     let mut out = FileVersions::default();
@@ -599,13 +677,15 @@ pub async fn versions(
             out.copies.insert(l.key, vec![]);
             continue;
         };
+        let ps = paths.get(&l.pack).map(Vec::as_slice).unwrap_or_default();
         let listed = tokio::task::block_in_place(|| {
             let mut st: State = load(&app.root, &state_path(copy))?;
-            let found = scan(&app.root, place, copy, &mut st)?;
-            if !found.is_empty() {
+            let found = scan(&app.root, place, copy, &mut st, Some(&waits(ps)))?;
+            if !found.changed.is_empty() {
                 save(&app.root, &state_path(copy), &st)?;
             }
-            changed.extend(found.into_iter().map(|path| Job {
+            app.link_files.later(copy, found.due);
+            changed.extend(found.changed.into_iter().map(|path| Job {
                 copy: l.key.clone(),
                 path,
                 content: true,
@@ -641,9 +721,10 @@ pub async fn compare(
     user: Uuid,
     theirs: &FileVersions,
 ) -> Result<Compared, String> {
-    let all = {
+    let (all, paths) = {
         let mut tx = app.store.begin().await.map_err(store_err)?;
-        linked(&mut tx, user).await.map_err(store_err)?
+        let all = linked(&mut tx, user).await.map_err(store_err)?;
+        (all, crate::packs::all_paths(&mut tx).await.map_err(store_err)?)
     };
     let _held = app.link_files.lock(user).await;
     let mut out = Compared::default();
@@ -651,14 +732,16 @@ pub async fn compare(
         let Some(listed) = theirs.copies.get(&l.key) else {
             continue;
         };
+        let ps = paths.get(&l.pack).map(Vec::as_slice).unwrap_or_default();
         let mut st = match l.copy {
             Some(copy) => tokio::task::block_in_place(|| {
                 let mut st: State = load(&app.root, &state_path(copy))?;
-                let found = scan(&app.root, place, copy, &mut st)?;
-                if !found.is_empty() {
+                let found = scan(&app.root, place, copy, &mut st, Some(&waits(ps)))?;
+                if !found.changed.is_empty() {
                     save(&app.root, &state_path(copy), &st)?;
                 }
-                out.found.extend(found.into_iter().map(|path| Job {
+                app.link_files.later(copy, found.due);
+                out.found.extend(found.changed.into_iter().map(|path| Job {
                     copy: l.key.clone(),
                     path,
                     content: true,
@@ -821,8 +904,11 @@ pub async fn take(
         content,
     };
     tokio::task::block_in_place(|| {
+        // Every change made here is found first, however soon after the
+        // last, so none is written over unkept.
         let mut st: State = load(root, &state_path(copy))?;
-        out.found = scan(root, place, copy, &mut st)?
+        out.found = scan(root, place, copy, &mut st, None)?
+            .changed
             .into_iter()
             .map(|path| Job {
                 copy: piece.copy.clone(),
@@ -864,6 +950,7 @@ pub async fn take(
                         ..theirs.clone()
                     },
                     seen: None,
+                    made: 0,
                 },
             );
         } else {
@@ -897,6 +984,7 @@ pub async fn take(
                         ..theirs.clone()
                     },
                     seen,
+                    made: 0,
                 },
             );
             out.relay.push(job(!theirs.deleted));
@@ -958,7 +1046,7 @@ pub async fn restore(
         save(root, &history_path(copy), &h).map_err(fail)?;
         // What is there is kept as the restored version was.
         let mut st: State = load(root, &state_path(copy)).map_err(fail)?;
-        scan(root, place, copy, &mut st).map_err(fail)?;
+        scan(root, place, copy, &mut st, None).map_err(fail)?;
         save(root, &state_path(copy), &st).map_err(fail)?;
         if let Some(k) = st.files.get(&r.path).filter(|k| !k.v.deleted) {
             keep(root, copy, &r.path, &k.v, place).map_err(fail)?;

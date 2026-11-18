@@ -313,6 +313,13 @@ pub struct Pack {
     pub squash: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// The person's other pack of the name this one had, made in another
+    /// place, which linking renamed it apart from.
+    #[serde(default)]
+    pub same_name: Option<Uuid>,
+    /// The packs merged into this one.
+    #[serde(default)]
+    pub merged: Vec<Uuid>,
 }
 
 /// `pack_paths`.
@@ -321,6 +328,11 @@ pub struct PackPath {
     pub pack_id: Uuid,
     pub path: String,
     pub sensitive: bool,
+    /// How often a file under it written in bursts is sent to linked
+    /// places: at most once in so many seconds, every change for 0, once
+    /// a second for none.
+    #[serde(default)]
+    pub send_every: Option<i32>,
 }
 
 /// `copies`: one set of a pack's files.
@@ -505,6 +517,15 @@ pub struct SignInGrant {
 pub struct LinkPerson {
     pub user_id: Uuid,
     pub person_id: Uuid,
+}
+
+/// `link_settings`: how this place sends a person's files to the places
+/// they link.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinkSettings {
+    pub user_id: Uuid,
+    /// Bytes a second to each place; 0 is no limit.
+    pub bandwidth: i64,
 }
 
 /// `links`: a place a person's account here is linked with.

@@ -212,8 +212,17 @@ function ReachWarning({ pack }: { pack: Pack }) {
   )
 }
 
-// pathKey names a path and whether it is sensitive, for comparing lists.
-const pathKey = (p: PackPath) => `${p.path}${p.sensitive ? ' (sensitive)' : ''}`
+// pathKey names a path, whether it is sensitive and how often it is sent,
+// for comparing lists.
+const pathKey = (p: PackPath) =>
+  `${p.path}${p.sensitive ? ' (sensitive)' : ''}${p.send_every != null ? ` (${sendLabel(p.send_every)})` : ''}`
+
+// The choices of how often a file written in bursts is sent to linked
+// places, in seconds: 0 as it is written.
+const SEND_CHOICES = [0, 5, 10, 30, 60, 300]
+
+const sendLabel = (n: number) =>
+  n === 0 ? 'As written' : n % 60 === 0 ? `At most every ${n / 60} min` : `At most every ${n} s`
 
 // BuiltinDefaults is a built-in pack's paths as Hangar ships them: whether
 // its own differ, how, and a way back to them.
@@ -361,6 +370,7 @@ function PathRows({ value, onChange }: { value: PackPath[]; onChange: (v: PackPa
           <tr>
             <th>Path</th>
             <th className="files-sensitive">Sensitive</th>
+            <th className="files-send">Sent to Linked Places</th>
             <th className="files-remove" />
           </tr>
         </thead>
@@ -385,6 +395,25 @@ function PathRows({ value, onChange }: { value: PackPath[]; onChange: (v: PackPa
                   disabled={p.path.startsWith('!')}
                   onChange={(e) => set(i, { sensitive: e.target.checked })}
                 />
+              </td>
+              <td className="files-send">
+                <select
+                  aria-label={`How often ${p.path || 'this path'} is sent to linked places`}
+                  value={p.send_every ?? ''}
+                  disabled={p.path.startsWith('!')}
+                  onChange={(e) =>
+                    set(i, { send_every: e.target.value === '' ? undefined : Number(e.target.value) })
+                  }
+                >
+                  <option value="">Default</option>
+                  {[...new Set([...SEND_CHOICES, ...(p.send_every != null ? [p.send_every] : [])])]
+                    .sort((a, b) => a - b)
+                    .map((n) => (
+                      <option key={n} value={n}>
+                        {sendLabel(n)}
+                      </option>
+                    ))}
+                </select>
               </td>
               <td className="files-remove">
                 <button
@@ -415,7 +444,9 @@ function PathRows({ value, onChange }: { value: PackPath[]; onChange: (v: PackPa
         In the home directory with <code>~/</code>, or absolute. One ending in <code>/</code> shares a directory and
         everything in it; one starting with <code>!</code> leaves a path in such a directory to each environment. Every
         file under a sensitive path is kept from environments whose template withholds sensitive files. A file at an
-        absolute path is written once the directory it is in exists, so a repository cloned there is cloned first.
+        absolute path is written once the directory it is in exists, so a repository cloned there is cloned first. A
+        file written in bursts is sent to your linked places at most once a second, the latest each time, unless its
+        path, or the directory holding it, says otherwise.
       </p>
     </>
   )

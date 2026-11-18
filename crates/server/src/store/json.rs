@@ -17,7 +17,7 @@ use super::rows::{
     RegistryBlob, RegistryUpload, RepositoryBlob, RepositoryCollaborator, ServerKey, Session,
     SignInGrant, SshKey, Task, Team, TeamMember, Template, TlsEntry, TlsLock, User, Worker,
 };
-use super::rows::{Link, LinkPerson, LinkRecord};
+use super::rows::{Link, LinkPerson, LinkRecord, LinkSettings};
 use super::{Error, Result};
 
 /// Everything the server keeps, as the Postgres tables hold it.
@@ -70,6 +70,7 @@ pub struct State {
     pub link_persons: Vec<LinkPerson>,
     pub links: Vec<Link>,
     pub link_records: Vec<LinkRecord>,
+    pub link_settings: Vec<LinkSettings>,
 }
 
 impl State {
@@ -109,6 +110,8 @@ impl State {
                 squash: "all_squash".into(),
                 created_at: now,
                 updated_at: now,
+                same_name: None,
+                merged: vec![],
             }],
             pack_paths: crate::packs::profile_defaults()
                 .into_iter()
@@ -116,6 +119,7 @@ impl State {
                     pack_id: profile,
                     path: p.path,
                     sensitive: p.sensitive,
+                    send_every: p.send_every,
                 })
                 .collect(),
             ..State::default()

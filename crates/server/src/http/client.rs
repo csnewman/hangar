@@ -23,6 +23,7 @@ pub fn routes() -> Router<Shared> {
         .route("/me/tokens/{id}", delete(revoke_token))
         .route("/me/links", get(list_links))
         .route("/me/links/{place}", put(put_link).delete(delete_link))
+        .route("/me/link-settings", put(set_link_settings))
 }
 
 /// The link API's view of a link.
@@ -55,6 +56,7 @@ async fn list_links(State(app): State<Shared>, s: Signed) -> Result<Json<types::
     let mut tx = app.store.begin().await?;
     let person = tx.person(s.principal.user_id).await?;
     let links = tx.links(Some(s.principal.user_id)).await?;
+    let bandwidth = tx.link_bandwidth(s.principal.user_id).await?;
     Ok(Json(types::Links {
         place: types::LinkPlace {
             id: place.id.to_string(),
@@ -66,6 +68,23 @@ async fn list_links(State(app): State<Shared>, s: Signed) -> Result<Json<types::
         allowed: app.cfg.personal_links,
         items: links.into_iter().map(link_spec).collect(),
         next: None,
+        bandwidth: Some(bandwidth).filter(|b| *b > 0),
+    }))
+}
+
+async fn set_link_settings(
+    State(app): State<Shared>,
+    s: Signed,
+    Body(b): Body<types::LinkSettings>,
+) -> Result<Json<types::LinkSettings>, ApiError> {
+    if b.bandwidth < 0 {
+        return Err(ApiError::invalid("bandwidth is bytes a second, or 0 for no limit"));
+    }
+    let mut tx = app.store.begin().await?;
+    tx.set_link_bandwidth(s.principal.user_id, b.bandwidth).await?;
+    tx.commit().await?;
+    Ok(Json(types::LinkSettings {
+        bandwidth: b.bandwidth,
     }))
 }
 

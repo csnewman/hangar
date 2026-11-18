@@ -311,6 +311,27 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /me/link-settings:
+    put:
+      operationId: setLinkSettings
+      summary: >-
+        How this place sends the user's files to the places they link: at
+        most so many bytes a second to each. The setting is the person's,
+        and reaches every linked place.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LinkSettings" }
+      responses:
+        "200":
+          description: The settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LinkSettings" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /me/ssh-keys:
     get:
       operationId: listSSHKeys
@@ -1238,6 +1259,23 @@ components:
         next:
           type: string
           description: Absent; links come in one page.
+        bandwidth:
+          type: integer
+          format: int64
+          description: >-
+            How fast this place sends the person's files to each linked
+            place, in bytes a second; absent or 0 is no limit.
+
+    LinkSettings:
+      type: object
+      required: [bandwidth]
+      additionalProperties: false
+      properties:
+        bandwidth:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Bytes a second to each linked place; 0 is no limit.
 
     LinkPlace:
       type: object

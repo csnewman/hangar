@@ -1362,6 +1362,8 @@ export interface components {
             path: string;
             /** @description Every file under it, in every copy, is kept from environments given no sensitive files. */
             sensitive: boolean;
+            /** @description How often a file under it that is written in bursts is sent to the owner's linked places: at most once in so many seconds, or every change as it is written for 0. Without it, as the path holding it says, else at most once a second. */
+            send_every?: number;
         };
         /**
          * @description The environments a pack reaches without a template listing it: none (listed), its owner's, its team's members', or everyone's (an administrator's to set).

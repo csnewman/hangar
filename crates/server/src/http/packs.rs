@@ -57,7 +57,11 @@ fn text<'a>(b: &'a Value, k: &str) -> &'a str {
 }
 
 fn path_json(p: &packs::Path) -> Value {
-    json!({ "path": p.path, "sensitive": p.sensitive })
+    let mut out = json!({ "path": p.path, "sensitive": p.sensitive });
+    if let Some(n) = p.send_every {
+        out["send_every"] = json!(n);
+    }
+    out
 }
 
 fn pack_json(k: &PackView, default: Option<Uuid>) -> Value {
@@ -142,6 +146,10 @@ fn input(b: &Value) -> Result<PackInput, ApiError> {
         .map(|p| packs::Path {
             path: text(p, "path").to_string(),
             sensitive: p.get("sensitive").and_then(Value::as_bool).unwrap_or(false),
+            send_every: p
+                .get("send_every")
+                .and_then(Value::as_i64)
+                .map(|n| n.clamp(-1, i64::from(i32::MAX)) as i32),
         })
         .collect();
     Ok(PackInput {

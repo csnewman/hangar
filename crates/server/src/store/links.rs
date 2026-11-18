@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::rows::{Link, LinkPerson, LinkRecord};
+use super::rows::{Link, LinkPerson, LinkRecord, LinkSettings};
 use super::{Backend, Result, Tx};
 
 const LINK_COLUMNS: &str = "user_id, place_id, name, public_key, url, created_at, reached_at, \
@@ -89,6 +89,51 @@ impl Tx {
             }
         }
         Ok(true)
+    }
+
+    /// How fast this place sends a user's files to each place linked, in
+    /// bytes a second; 0 is no limit.
+    pub async fn link_bandwidth(&mut self, user: Uuid) -> Result<i64> {
+        let found = match &mut self.inner {
+            Backend::Pg(tx) => {
+                sqlx::query_scalar("SELECT bandwidth FROM link_settings WHERE user_id = $1")
+                    .bind(user)
+                    .fetch_optional(&mut **tx)
+                    .await?
+            }
+            Backend::Json(tx) => tx
+                .work
+                .link_settings
+                .iter()
+                .find(|s| s.user_id == user)
+                .map(|s| s.bandwidth),
+        };
+        Ok(found.unwrap_or(0))
+    }
+
+    pub async fn set_link_bandwidth(&mut self, user: Uuid, bandwidth: i64) -> Result<()> {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
+                sqlx::query(
+                    "INSERT INTO link_settings (user_id, bandwidth) VALUES ($1, $2)
+                     ON CONFLICT (user_id) DO UPDATE SET bandwidth = EXCLUDED.bandwidth",
+                )
+                .bind(user)
+                .bind(bandwidth)
+                .execute(&mut **tx)
+                .await?;
+            }
+            Backend::Json(tx) => {
+                let all = &mut tx.work.link_settings;
+                all.retain(|s| s.user_id != user);
+                all.push(LinkSettings {
+                    user_id: user,
+                    bandwidth,
+                });
+            }
+        }
+        self.signal(super::signals::Signal::Records);
+        Ok(())
     }
 
     /// The user here who is a person: the one given that person's ID by a
