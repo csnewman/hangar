@@ -169,3 +169,26 @@ async fn a_teams_template_goes_by_role() {
         .await
         .expect("a team admin deletes it");
 }
+
+/// What a template keeps from its environments, for code its owner does
+/// not trust, is kept with it and given back as it was set.
+#[tokio::test]
+async fn what_a_template_keeps_from_its_environments_is_kept() {
+    let Some(s) = Server::start() else { return };
+    let admin = s.admin().await;
+    let mut t = machine("Untrusted", "private");
+    t["spec"]["access"] = json!({ "no_registry": true, "no_ssh_keys": true });
+    let made = admin
+        .create_template(&body(t))
+        .await
+        .expect("a template")
+        .into_inner();
+    let got = admin.get_template(&made.id).await.expect("it").into_inner();
+    let access = got
+        .spec
+        .access
+        .expect("what it keeps from its environments");
+    assert_eq!(access.no_registry, Some(true));
+    assert_eq!(access.no_ssh_keys, Some(true));
+    assert_ne!(access.no_sensitive_files, Some(true));
+}

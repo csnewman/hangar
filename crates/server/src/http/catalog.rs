@@ -183,9 +183,15 @@ fn template_of(v: &templates::View) -> Result<types::Template, ApiError> {
 
 /// What the web UI's template body asks for.
 fn input(b: types::TemplateInput) -> Result<templates::Input, ApiError> {
-    let spec: Spec = serde_json::to_value(&b.spec)
-        .and_then(serde_json::from_value)
-        .map_err(ApiError::invalid)?;
+    // The API's spec holds what it keeps from its environments as an
+    // object, access; the stored spec holds them beside its other fields.
+    let mut v = serde_json::to_value(&b.spec).map_err(ApiError::invalid)?;
+    if let Some(o) = v.as_object_mut()
+        && let Some(Value::Object(access)) = o.remove("access")
+    {
+        o.extend(access);
+    }
+    let spec: Spec = serde_json::from_value(v).map_err(ApiError::invalid)?;
     Ok(templates::Input {
         name: b.name.to_string(),
         description: b.description.map(|d| d.to_string()).unwrap_or_default(),
