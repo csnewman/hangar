@@ -33,6 +33,8 @@ pub enum Page {
     Places,
     /// Which of the person's places are linked, and Link Places.
     Linked,
+    /// The person's packs across their places.
+    Packs,
     /// A Hangar the app made on a Proxmox: where it runs, its release.
     Hangar(String),
     /// The user's account at a place.
@@ -60,6 +62,7 @@ impl Page {
             Page::Notifications => "Notifications",
             Page::Places => "Places",
             Page::Linked => "Linked Places",
+            Page::Packs => "Packs",
             Page::Hangar(_) => "This Hangar",
             Page::Account(_) => "Account",
             Page::Browser(_) => "Web Pages",
@@ -133,7 +136,29 @@ impl Page {
                 "add a place",
             ],
             Page::Linked => &[
-                "link", "linked", "unlink", "share", "sync", "packs", "files", "keys", "person",
+                "link",
+                "linked",
+                "unlink",
+                "share",
+                "sync",
+                "keys",
+                "person",
+                "bandwidth",
+                "sending",
+            ],
+            Page::Packs => &[
+                "packs",
+                "files",
+                "paths",
+                "profile",
+                "sync",
+                "sent",
+                "bursts",
+                "sensitive",
+                "copies",
+                "replaced",
+                "restore",
+                "merge",
             ],
             Page::Hangar(_) => &[
                 "proxmox",
@@ -211,6 +236,8 @@ pub struct SettingsView {
     hangars: Vec<(String, Entity<ThisHangarView>)>,
     /// The Linked Places page, made when first shown.
     linked: Option<Entity<crate::linked::LinkedView>>,
+    /// The Packs page, made when first shown.
+    sync_packs: Option<Entity<crate::syncpacks::SyncPacksView>>,
     /// The monospaced font families installed, found when the Terminal page
     /// is first shown.
     fonts: Option<Vec<String>>,
@@ -289,6 +316,7 @@ impl SettingsView {
             accounts: vec![],
             hangars: vec![],
             linked: None,
+            sync_packs: None,
             fonts: None,
             _subs: subs,
         };
@@ -406,6 +434,16 @@ impl SettingsView {
         view
     }
 
+    fn sync_packs(&mut self, cx: &mut Context<Self>) -> Entity<crate::syncpacks::SyncPacksView> {
+        if let Some(v) = &self.sync_packs {
+            return v.clone();
+        }
+        let places = self.places.clone();
+        let view = cx.new(|cx| crate::syncpacks::SyncPacksView::new(places, cx));
+        self.sync_packs = Some(view.clone());
+        view
+    }
+
     fn hangar(&mut self, place: &str, cx: &mut Context<Self>) -> Entity<ThisHangarView> {
         if let Some((_, v)) = self.hangars.iter().find(|(p, _)| p == place) {
             return v.clone();
@@ -449,7 +487,7 @@ impl Render for SettingsView {
                     .unwrap_or_default();
                 format!("{name} › {}", self.page.title())
             }
-            Page::Linked => format!("Sync › {}", self.page.title()),
+            Page::Linked | Page::Packs => format!("Sync › {}", self.page.title()),
             page => format!("App › {}", page.title()),
         };
         let sheet = match self.page {
@@ -578,7 +616,12 @@ impl SettingsView {
             .collect();
         let mut groups: Vec<(String, String, Vec<Page>, Option<&'static str>)> = vec![
             ("app".into(), "App".into(), Page::APP.to_vec(), None),
-            ("sync".into(), "Sync".into(), vec![Page::Linked], None),
+            (
+                "sync".into(),
+                "Sync".into(),
+                vec![Page::Linked, Page::Packs],
+                None,
+            ),
         ];
         for (id, name, signed_out, made) in places {
             let mut pages = vec![Page::Account(id.clone()), Page::Browser(id.clone())];
@@ -634,6 +677,7 @@ impl SettingsView {
                     Page::Hangar(pl) => format!("settings-node-hangar-{pl}"),
                     Page::Browser(pl) => format!("settings-node-browser-{pl}"),
                     Page::Linked => "settings-node-linked".into(),
+                    Page::Packs => "settings-node-sync-packs".into(),
                     other => format!("settings-node-{}", other.title().to_lowercase()),
                 };
                 let go = page.clone();
@@ -686,6 +730,7 @@ impl SettingsView {
             Page::Notifications => self.notifications(p, cx).into_any_element(),
             Page::Places => self.places_page(p, cx).into_any_element(),
             Page::Linked => self.linked(cx).into_any_element(),
+            Page::Packs => self.sync_packs(cx).into_any_element(),
             Page::Account(id) => self.account(&id, window, cx).into_any_element(),
             Page::Hangar(id) => self.hangar(&id, cx).into_any_element(),
             Page::Browser(id) => self.browser(&id, p, cx).into_any_element(),

@@ -71,6 +71,7 @@ pub mod snippet;
 pub mod spell;
 pub mod store;
 pub mod structure;
+pub mod syncpacks;
 pub mod table;
 pub mod termconn;
 pub mod termghostty;

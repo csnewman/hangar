@@ -268,6 +268,54 @@ impl Client {
         self.call(|c| c.delete_link(place))
     }
 
+    /// Sends the user's files to each linked place at most so many bytes
+    /// a second; 0 is no limit.
+    pub fn set_bandwidth(&self, bandwidth: i64) -> Result<(), Error> {
+        let body = types::LinkSettings { bandwidth };
+        self.call(|c| c.set_link_settings(&body)).map(|_| ())
+    }
+
+    /// The packs the user may use.
+    pub fn packs(&self) -> Result<Vec<types::Pack>, Error> {
+        let first = self.call(|c| c.list_packs())?;
+        self.all(first)
+    }
+
+    /// Makes a pack of the user's own.
+    pub fn create_pack(&self, input: &types::PackInput) -> Result<types::Pack, Error> {
+        self.call(|c| c.create_pack(input))
+    }
+
+    /// Changes a pack: its name, description, attach rule and paths.
+    pub fn update_pack(&self, id: &str, input: &types::PackInput) -> Result<types::Pack, Error> {
+        self.call(|c| c.update_pack(id, input))
+    }
+
+    /// A pack's copies the user may use, their own first.
+    pub fn copies(&self, pack: &str) -> Result<Vec<types::Copy>, Error> {
+        let first = self.call(|c| c.list_copies(pack))?;
+        self.all(first)
+    }
+
+    /// Merges a pack renamed apart from another of the same name into it.
+    pub fn merge_pack(&self, id: &str) -> Result<types::Pack, Error> {
+        self.call(|c| c.merge_pack(id))
+    }
+
+    pub fn keep_pack_apart(&self, id: &str) -> Result<types::Pack, Error> {
+        self.call(|c| c.keep_pack_apart(id))
+    }
+
+    /// The versions of a copy's files a newer change replaced.
+    pub fn copy_history(&self, copy: &str) -> Result<Vec<types::ReplacedFile>, Error> {
+        let first = self.call(|c| c.list_copy_history(copy))?;
+        self.all(first)
+    }
+
+    pub fn restore_copy_file(&self, copy: &str, entry: &str) -> Result<(), Error> {
+        self.call(|c| c.restore_copy_file(copy, entry))
+    }
+
     pub fn login_keys(&self) -> Result<Vec<LoginKey>, Error> {
         let first = self.call(|c| c.list_login_keys())?;
         self.all(first)
@@ -694,6 +742,9 @@ pages!(
     EnvironmentPackList => EnvironmentPack,
     WorkerSizeList => Resources,
     TerminalSessionList => TerminalSession,
+    PackList => Pack,
+    CopyList => Copy,
+    ReplacedFileList => ReplacedFile,
 );
 
 /// What an error answer says: the spec's Error body, or nothing for a call

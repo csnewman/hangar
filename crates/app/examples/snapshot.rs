@@ -21,8 +21,8 @@
 //! SNAPSHOT_PREFS=JSON sets settings over the copy of the user's, objects
 //! merged ({"terminal": {"theme_light": "Nord"}});
 //! SNAPSHOT_SETTINGS=page opens Settings at a page (appearance, keymap,
-//! editor, terminal, notifications, places, or account and browser for the
-//! first place);
+//! editor, terminal, notifications, places, linked, packs, or account and
+//! browser for the first place);
 //! SNAPSHOT_ENV_SETTINGS=page opens the opened environment's settings at a
 //! page (general, resources, files, access, ports, danger);
 //! SNAPSHOT_NEW_ENV=1 opens the New environment sheet (SNAPSHOT_PRESS
@@ -178,6 +178,8 @@ fn main() {
                             "terminal" => Page::Terminal,
                             "notifications" => Page::Notifications,
                             "places" => Page::Places,
+                            "linked" => Page::Linked,
+                            "packs" => Page::Packs,
                             "account" => Page::Account(first),
                             "browser" => Page::Browser(first),
                             _ => Page::Appearance,

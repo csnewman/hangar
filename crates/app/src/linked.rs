@@ -372,10 +372,120 @@ impl Render for LinkedView {
             .when_some(self.error.clone(), |d, e| {
                 d.child(div().max_w(px(620.)).text_color(p.bad).child(e))
             })
+            .when(self.loaded, |d| d.child(self.sending(&p, cx)))
+    }
+}
+
+/// The bandwidth limits the page offers, in bytes a second; 0 is none.
+const BANDWIDTHS: [i64; 6] = [0, 256_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000];
+
+/// A bandwidth limit, in words.
+fn bandwidth_label(b: i64) -> String {
+    match b {
+        0 => "No limit".into(),
+        b if b >= 1_000_000 => format!("{} MB/s", b / 1_000_000),
+        b => format!("{} kB/s", b / 1000),
     }
 }
 
 impl LinkedView {
+    /// The limit the places hold: the person's, the same in every linked
+    /// place once they have exchanged records.
+    fn bandwidth(&self) -> i64 {
+        self.known
+            .iter()
+            .filter_map(|k| k.links.as_ref().ok())
+            .find_map(|l| l.bandwidth)
+            .unwrap_or(0)
+    }
+
+    /// Sets the bandwidth limit in every place the app reaches.
+    fn set_bandwidth(&mut self, b: i64, cx: &mut Context<Self>) {
+        let sources = sources(&self.places, cx);
+        self.busy = true;
+        self.error = None;
+        cx.notify();
+        let task = cx.background_spawn(async move {
+            let mut failed = vec![];
+            for s in sources {
+                if let Some(c) = &s.client
+                    && let Err(e) = c.set_bandwidth(b)
+                    && !matches!(e, Error::Status(404, _))
+                {
+                    failed.push(format!("{}: {e}", s.name));
+                }
+            }
+            failed
+        });
+        cx.spawn(async move |this, cx| {
+            let failed = task.await;
+            let _ = this.update(cx, |v, cx| {
+                v.busy = false;
+                v.error = (!failed.is_empty()).then(|| failed.join("\n"));
+                v.load(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// How files are sent: the burst rule, set per path on each pack, and
+    /// the bandwidth limit.
+    fn sending(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_component::button::Button;
+        use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
+        use gpui_component::{Disableable as _, Sizable as _};
+        let chosen = self.bandwidth();
+        let me = cx.entity().downgrade();
+        let row = |label: &'static str| {
+            h_flex()
+                .max_w(px(640.))
+                .gap(px(8.))
+                .px(px(6.))
+                .py(px(3.))
+                .border_1()
+                .border_color(p.border)
+                .rounded(px(5.))
+                .child(div().flex_1().child(label))
+        };
+        v_flex()
+            .gap(px(4.))
+            .child(
+                div()
+                    .mt(px(8.))
+                    .text_size(px(10.5))
+                    .text_color(p.muted)
+                    .child("SENDING"),
+            )
+            .child(row("Files written in bursts").child(
+                div().text_size(px(10.5)).text_color(p.muted).child(
+                    "At most once a second, the latest each time · set per path on each pack",
+                ),
+            ))
+            .child(
+                row("Bandwidth per link").child(
+                    Button::new("linked-bandwidth")
+                        .small()
+                        .outline()
+                        .label(format!("{} ▾", bandwidth_label(chosen)))
+                        .disabled(self.busy)
+                        .dropdown_menu(move |mut menu, _, cx| {
+                            crate::ui::modal(cx);
+                            for b in BANDWIDTHS {
+                                let me = me.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(bandwidth_label(b))
+                                        .checked(b == chosen)
+                                        .on_click(move |_, _, cx| {
+                                            let _ = me.update(cx, |v, cx| v.set_bandwidth(b, cx));
+                                        }),
+                                );
+                            }
+                            menu
+                        }),
+                ),
+            )
+    }
+
     /// A place's links, below its row, and Unlink.
     fn detail(&self, row: &linking::Row, p: &Palette, cx: &mut Context<Self>) -> gpui::Div {
         let mut d = v_flex()

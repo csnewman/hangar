@@ -487,24 +487,40 @@ impl Places {
     }
 }
 
-/// Places for a run: the user's own, and one given by HANGAR_URL and
-/// HANGAR_TOKEN for this run only.
+/// Places for a run: the user's own, one given by HANGAR_URL and
+/// HANGAR_TOKEN, and any HANGAR_PLACES names (each `name|url|token`,
+/// separated by spaces), for this run only.
 pub fn from_env(cx: &mut App) -> Entity<Places> {
     let mut transient = vec![];
-    let mut tokens: Arc<dyn Tokens> = Arc::new(store::Keychain);
-    if let (Ok(url), Ok(token)) = (std::env::var("HANGAR_URL"), std::env::var("HANGAR_TOKEN"))
-        && let Some(url) = store::normalise_url(&url)
+    let mut given: Vec<(Option<String>, String, String)> = vec![];
+    if let (Ok(url), Ok(token)) = (std::env::var("HANGAR_URL"), std::env::var("HANGAR_TOKEN")) {
+        given.push((None, url, token));
+    }
+    for each in std::env::var("HANGAR_PLACES")
+        .unwrap_or_default()
+        .split_whitespace()
     {
+        if let [name, url, token] = each.splitn(3, '|').collect::<Vec<_>>()[..] {
+            given.push((Some(name.to_string()), url.to_string(), token.to_string()));
+        }
+    }
+    let mut tokens: Arc<dyn Tokens> = Arc::new(store::Keychain);
+    let mem = store::MemoryTokens::default();
+    for (name, url, token) in given {
+        let Some(url) = store::normalise_url(&url) else {
+            continue;
+        };
         let id = store::place_id(&url);
-        let mem = store::MemoryTokens::default();
         let _ = mem.set(&id, &token);
-        tokens = Arc::new(Layered(Arc::new(mem), tokens));
         transient.push(PlaceConfig {
-            name: id.split(':').next().unwrap_or(&id).to_string(),
+            name: name.unwrap_or_else(|| id.split(':').next().unwrap_or(&id).to_string()),
             id,
             url,
             ..Default::default()
         });
+    }
+    if !transient.is_empty() {
+        tokens = Arc::new(Layered(Arc::new(mem), tokens));
     }
     let dirs = Dirs::user();
     cx.new(|cx| Places::new(dirs, tokens, transient, cx))
