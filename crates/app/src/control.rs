@@ -286,6 +286,16 @@ fn run(cmd: &str, req: &Value, window: &mut Window, cx: &mut App) -> Result<Valu
                 "stats": crate::renderstats::take(),
             }))
         }
+        "proxmox-token" => {
+            // Add a Place › Proxmox checks the token in a file the app
+            // reads, so its secret is never typed.
+            let path = req["path"].as_str().ok_or("no path")?;
+            let view = shell(window, cx)
+                .and_then(|s| s.read(cx).adding())
+                .ok_or("Add a Place is not open")?;
+            view.update(cx, |v, cx| v.pve_check_file(path, cx))?;
+            Ok(Value::Null)
+        }
         "quit" => {
             cx.quit();
             Ok(Value::Null)

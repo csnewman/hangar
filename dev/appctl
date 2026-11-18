@@ -20,6 +20,9 @@ app's config folder says.
                                       shown terminal's output asks, or all
                                       views afresh
   dev/appctl settings JSON            sets settings, objects merged
+  dev/appctl proxmox-token FILE       Add a Place › Proxmox checks the token
+                                      in FILE (USER@REALM!ID=SECRET), which
+                                      the app reads
   dev/appctl quit
 """
 
@@ -97,6 +100,8 @@ def main(argv):
             req["frames"] = int(args[1])
     elif cmd == "settings":
         req["settings"] = json.loads(args[0])
+    elif cmd == "proxmox-token":
+        req["path"] = os.path.abspath(args[0])
     try:
         out = request(info, req)
     except OSError as e:

@@ -43,9 +43,11 @@ pub struct ThisHangarView {
     now: Option<String>,
     work: Option<Task<()>>,
     /// Its certificate, as it presents it, and whether this computer's
-    /// browsers trust it; whether trusting it is under way.
+    /// browsers trust it; whether either is being found out, and whether
+    /// trusting it is under way.
     cert: Option<Vec<u8>>,
     trusted: Option<bool>,
+    looking: bool,
     trusting: bool,
     trust_work: Option<Task<()>>,
 }
@@ -74,6 +76,7 @@ impl ThisHangarView {
             work: None,
             cert: None,
             trusted: None,
+            looking: false,
             trusting: false,
             trust_work: None,
         };
@@ -90,9 +93,21 @@ impl ThisHangarView {
         };
         let (url, pin) = (config.url.clone(), config.pin.clone());
         let host = crate::store::place_id(&url);
+        // presented() takes an address without a port as Proxmox's (8006);
+        // a Hangar's web address names none when it is HTTPS's own.
+        let named = match host.strip_prefix('[') {
+            Some(v6) => v6.contains("]:"),
+            None => host.contains(':'),
+        };
+        let at = if named {
+            url.clone()
+        } else {
+            format!("{}:443", url.trim_end_matches('/'))
+        };
+        self.looking = true;
         let task = cx.background_spawn(async move {
             let der = crate::api::runtime()
-                .block_on(hangar::presented(&url))
+                .block_on(hangar::presented(&at))
                 .ok()
                 .filter(|d| hangar_hub::tls::fingerprint(d) == pin)?
                 .to_vec();
@@ -106,6 +121,7 @@ impl ThisHangarView {
                     Some((der, t)) => (Some(der), Some(t)),
                     None => (None, None),
                 };
+                v.looking = false;
                 v.trusting = false;
                 cx.notify();
             });
@@ -575,6 +591,7 @@ impl Render for ThisHangarView {
                 (_, true) => ("Waiting for macOS…", None),
                 (Some(true), _) => ("Trusted by this Mac", Some(("Remove Trust", false))),
                 (Some(false), _) => ("Not trusted", Some(("Trust in Keychain…", true))),
+                (None, _) if self.looking => ("Checking…", None),
                 (None, _) => ("Unknown", None),
             };
             h_flex()

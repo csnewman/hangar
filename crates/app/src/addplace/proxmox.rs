@@ -278,7 +278,30 @@ impl AddPlaceView {
             cx.notify();
             return;
         }
-        let token = format!("{id}={secret}");
+        self.pve_check_token(format!("{id}={secret}"), cx);
+    }
+
+    /// Checks a token file (`USER@REALM!ID=SECRET`), as `proxmox.token_file`
+    /// holds one, read by the app: the dev build's control port, which
+    /// drives the flow with a token nobody types.
+    #[cfg(feature = "control")]
+    pub fn pve_check_file(&mut self, path: &str, cx: &mut Context<Self>) -> Result<(), String> {
+        if self.pve.fingerprint.is_empty() {
+            return Err("the Proxmox's address is not checked yet".into());
+        }
+        let token = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        let token = token.trim();
+        if !token
+            .split_once('=')
+            .is_some_and(|(id, s)| id.contains('!') && !s.is_empty())
+        {
+            return Err("the file holds no USER@REALM!ID=SECRET".into());
+        }
+        self.pve_check_token(token.to_string(), cx);
+        Ok(())
+    }
+
+    fn pve_check_token(&mut self, token: String, cx: &mut Context<Self>) {
         let pve = match Proxmox::new(&self.pve.api, &token, &self.pve.fingerprint) {
             Ok(p) => p,
             Err(e) => {
