@@ -10,8 +10,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use hangar_api::{
-    DesiredSet, EnvironmentFiles, LEVEL_HEADER, LEVELS_HEADER, Levels, Mismatch, RegisterWorker,
-    WorkerCredential, WorkerStatus,
+    DesiredSet, EnvironmentFiles, FilesChanged, LEVEL_HEADER, LEVELS_HEADER, Levels, Mismatch,
+    RegisterWorker, WorkerCredential, WorkerStatus,
 };
 use uuid::Uuid;
 
@@ -24,6 +24,7 @@ pub fn routes() -> Router<Shared> {
         .route("/desired", get(desired))
         .route("/status", put(status))
         .route("/environments/{id}/files", get(files))
+        .route("/environments/{id}/files/changed", post(files_changed))
         .route("/tunnel", get(tunnel))
         .layer(axum::middleware::from_fn(levels))
 }
@@ -212,4 +213,30 @@ async fn tunnel(
         eprintln!("hangar-server: worker tunnel closed: {id}");
     })
     .into_response()
+}
+
+/// Copies an environment's calls changed, as its worker tells them: those
+/// of the copies it is served are looked at, for the changes to go to the
+/// places their owners link.
+async fn files_changed(
+    State(app): State<Shared>,
+    WorkerId(worker): WorkerId,
+    Path(env): Path<String>,
+    Body(changed): Body<FilesChanged>,
+) -> Result<StatusCode, ApiError> {
+    let gone = || ApiError::new(StatusCode::NOT_FOUND, "no such environment on this worker");
+    let env = Uuid::parse_str(&env).map_err(|_| gone())?;
+    let files = match crate::packs::environment_files(&app.store, worker, env).await {
+        Ok(f) => f,
+        Err(crate::fail::Fail::NotFound(_)) => return Err(gone()),
+        Err(e) => return Err(e.into()),
+    };
+    app.link_files.mark(
+        changed
+            .sets
+            .iter()
+            .filter(|s| files.sets.contains(s))
+            .filter_map(|s| Uuid::parse_str(s).ok()),
+    );
+    Ok(StatusCode::NO_CONTENT)
 }

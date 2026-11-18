@@ -330,6 +330,16 @@ pub struct EnvironmentFiles {
     pub squash: BTreeMap<String, Squash>,
 }
 
+/// The copies an environment's calls have just changed, by ID, which its
+/// worker tells the server as they change (from API level 2), so that the
+/// server sends the changes on to the places the copies' owners link at
+/// once.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilesChanged {
+    #[serde(default, deserialize_with = "null")]
+    pub sets: Vec<String>,
+}
+
 /// Who an environment's callers act as on a pack's files, as an NFS
 /// export's options say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -356,7 +366,10 @@ pub enum Squash {
 /// worker refuses a server whose newest level is older than its own. So a
 /// server is never older than a worker it works with: a deployment upgrades
 /// its servers first.
-pub const API_LEVEL: u32 = 1;
+///
+/// 2: a worker tells its server of the copies its environments change
+/// (FilesChanged).
+pub const API_LEVEL: u32 = 2;
 
 /// The oldest level this side's server serves: older workers are refused,
 /// and are to be upgraded.

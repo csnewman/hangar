@@ -27,6 +27,7 @@ export type PackRef = Schemas['PackRef']
 export type Copy = Schemas['Copy']
 export type PackFile = Schemas['PackFile']
 export type PackFileContent = Schemas['PackFileContent']
+export type ReplacedFile = Schemas['ReplacedFile']
 export type AttachedPack = Schemas['AttachedPack']
 export type FileConflict = Schemas['FileConflict']
 export type SSHKey = Schemas['SSHKey']
@@ -137,6 +138,9 @@ export const api = {
     ),
   deleteCopyFile: (id: string, path: string) =>
     unwrap(client.DELETE('/api/frontend/copies/{id}/file', { params: { path: { id }, query: { path } } })),
+  copyHistory: (id: string) => unwrap(client.GET('/api/frontend/copies/{id}/history', byID(id))),
+  restoreCopyFile: (id: string, entry: string) =>
+    unwrap(client.POST('/api/frontend/copies/{id}/history/{entry}/restore', { params: { path: { id, entry } } })),
   environmentPacks: (id: string) => unwrap(client.GET('/api/frontend/environments/{id}/packs', byID(id))),
   chooseEnvironmentCopy: (id: string, pack: string, copy_id?: string) =>
     unwrap(

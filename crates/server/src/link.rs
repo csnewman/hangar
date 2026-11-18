@@ -254,8 +254,8 @@ fn box_key(
 }
 
 /// Seals plain to the place whose public key is given, bound to aad: a
-/// one-time key of the sender's, and the sealed bytes, both base64.
-fn seal(to_public_key: &str, aad: &str, plain: &[u8]) -> Result<(String, String), String> {
+/// one-time key of the sender's, base64, and the sealed bytes.
+fn seal(to_public_key: &str, aad: &str, plain: &[u8]) -> Result<(String, Vec<u8>), String> {
     let to = x_public(to_public_key).ok_or("the place's key is not an Ed25519 public key")?;
     let mut eph_secret = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut eph_secret);
@@ -268,12 +268,12 @@ fn seal(to_public_key: &str, aad: &str, plain: &[u8]) -> Result<(String, String)
         &mut buf,
     )
     .map_err(|_| "sealing".to_string())?;
-    Ok((b64(&eph.to_bytes()), b64(&buf)))
+    Ok((b64(&eph.to_bytes()), buf))
 }
 
 impl Place {
     /// Opens what was sealed to this place, bound to aad.
-    fn open(&self, eph: &str, sealed: &str, aad: &str) -> Option<Vec<u8>> {
+    fn open(&self, eph: &str, sealed: &[u8], aad: &str) -> Option<Vec<u8>> {
         let engine = base64::engine::general_purpose::STANDARD;
         let eph: [u8; 32] = engine.decode(eph).ok()?.try_into().ok()?;
         let eph = curve25519_dalek::montgomery::MontgomeryPoint(eph);
@@ -284,7 +284,7 @@ impl Place {
             &me.to_bytes(),
         )
         .ok()?;
-        let mut buf = engine.decode(sealed).ok()?;
+        let mut buf = sealed.to_vec();
         let plain = key
             .open_in_place(
                 ring::aead::Nonce::assume_unique_for_key([0u8; 12]),
@@ -327,6 +327,125 @@ impl Sealed {
         format!("{}\n{}\n{}", self.aad(), self.eph, hex(digest.as_ref()))
     }
 
+    /// What is signed of a binary message: the same, its sealed bytes'
+    /// SHA-256 marked as a binary message's.
+    fn binary_statement(&self, sealed: &[u8]) -> String {
+        let digest = ring::digest::digest(&ring::digest::SHA256, sealed);
+        format!(
+            "{}\n{}\nbinary {}",
+            self.aad(),
+            self.eph,
+            hex(digest.as_ref())
+        )
+    }
+
+    /// A message's header, unsealed and unsigned, for a payload to be
+    /// sealed into.
+    fn header(place: &Place, kind: &str, to: Uuid, person: Uuid, nonce: Option<&str>) -> Sealed {
+        let nonce = match nonce {
+            Some(n) => n.to_string(),
+            None => {
+                let mut n = [0u8; 16];
+                rand::thread_rng().fill_bytes(&mut n);
+                b64(&n)
+            }
+        };
+        Sealed {
+            from: place.id,
+            to,
+            person,
+            time: Utc::now().timestamp(),
+            nonce,
+            kind: kind.to_string(),
+            eph: String::new(),
+            data: String::new(),
+            signature: String::new(),
+        }
+    }
+
+    /// Whether it is a message of this kind to place, recent, signed by
+    /// the key given over statement.
+    fn check(
+        &self,
+        place: &Place,
+        kind: &str,
+        from_key: &str,
+        statement: &str,
+    ) -> Result<(), Refused> {
+        if self.to != place.id {
+            return Err(Refused::Elsewhere);
+        }
+        if self.kind != kind || (Utc::now().timestamp() - self.time).abs() > SKEW {
+            return Err(Refused::Stale);
+        }
+        if !verify(from_key, statement, &self.signature) {
+            return Err(Refused::Unproven);
+        }
+        Ok(())
+    }
+
+    /// A message carrying bytes beside its payload, as a binary frame:
+    /// the header's length (four bytes, big-endian) and the header, a
+    /// message whose data is empty, then the sealed bytes, which open to
+    /// the payload's length (the same way), the payload and the bytes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn make_binary(
+        place: &Place,
+        kind: &str,
+        to: Uuid,
+        to_key: &str,
+        person: Uuid,
+        payload: &impl Serialize,
+        bytes: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        let mut s = Sealed::header(place, kind, to, person, None);
+        let json = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
+        let mut plain = Vec::with_capacity(4 + json.len() + bytes.len());
+        plain.extend_from_slice(&(json.len() as u32).to_be_bytes());
+        plain.extend_from_slice(&json);
+        plain.extend_from_slice(bytes);
+        let sealed;
+        (s.eph, sealed) = seal(to_key, &s.aad(), &plain)?;
+        s.signature = place.sign(&s.binary_statement(&sealed));
+        let head = serde_json::to_vec(&s).map_err(|e| e.to_string())?;
+        let mut out = Vec::with_capacity(4 + head.len() + sealed.len());
+        out.extend_from_slice(&(head.len() as u32).to_be_bytes());
+        out.extend_from_slice(&head);
+        out.extend_from_slice(&sealed);
+        Ok(out)
+    }
+
+    /// A binary frame's header and its sealed bytes, unchecked.
+    pub fn parse_binary(frame: &[u8]) -> Option<(Sealed, &[u8])> {
+        let n = u32::from_be_bytes(frame.get(..4)?.try_into().ok()?) as usize;
+        let head = frame.get(4..4 + n)?;
+        Some((serde_json::from_slice(head).ok()?, &frame[4 + n..]))
+    }
+
+    /// What a binary message carries, its payload and bytes, once it is
+    /// shown to be a message of this kind to place from the place whose
+    /// key is given, and recent.
+    pub fn read_binary<T: serde::de::DeserializeOwned>(
+        &self,
+        sealed: &[u8],
+        place: &Place,
+        kind: &str,
+        from_key: &str,
+    ) -> Result<(T, Vec<u8>), Refused> {
+        self.check(place, kind, from_key, &self.binary_statement(sealed))?;
+        let plain = place
+            .open(&self.eph, sealed, &self.aad())
+            .ok_or(Refused::Unproven)?;
+        let n = plain
+            .get(..4)
+            .and_then(|b| b.try_into().ok())
+            .map(u32::from_be_bytes)
+            .ok_or(Refused::Unproven)? as usize;
+        let json = plain.get(4..4 + n).ok_or(Refused::Unproven)?;
+        let payload = serde_json::from_slice(json).map_err(|_| Refused::Unproven)?;
+        Ok((payload, plain[4 + n..].to_vec()))
+    }
+
     /// A message from place to the place `to` (whose key is given), for
     /// person, carrying payload; an answer gives the nonce it answers.
     pub fn make(
@@ -338,27 +457,11 @@ impl Sealed {
         nonce: Option<&str>,
         payload: &impl Serialize,
     ) -> Result<Sealed, String> {
-        let nonce = match nonce {
-            Some(n) => n.to_string(),
-            None => {
-                let mut n = [0u8; 16];
-                rand::thread_rng().fill_bytes(&mut n);
-                b64(&n)
-            }
-        };
-        let mut s = Sealed {
-            from: place.id,
-            to,
-            person,
-            time: Utc::now().timestamp(),
-            nonce,
-            kind: kind.to_string(),
-            eph: String::new(),
-            data: String::new(),
-            signature: String::new(),
-        };
+        let mut s = Sealed::header(place, kind, to, person, nonce);
         let plain = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
-        (s.eph, s.data) = seal(to_key, &s.aad(), &plain)?;
+        let sealed;
+        (s.eph, sealed) = seal(to_key, &s.aad(), &plain)?;
+        s.data = b64(&sealed);
         s.signature = place.sign(&s.statement());
         Ok(s)
     }
@@ -371,17 +474,12 @@ impl Sealed {
         kind: &str,
         from_key: &str,
     ) -> Result<T, Refused> {
-        if self.to != place.id {
-            return Err(Refused::Elsewhere);
-        }
-        if self.kind != kind || (Utc::now().timestamp() - self.time).abs() > SKEW {
-            return Err(Refused::Stale);
-        }
-        if !verify(from_key, &self.statement(), &self.signature) {
-            return Err(Refused::Unproven);
-        }
+        self.check(place, kind, from_key, &self.statement())?;
+        let sealed = base64::engine::general_purpose::STANDARD
+            .decode(&self.data)
+            .map_err(|_| Refused::Unproven)?;
         let plain = place
-            .open(&self.eph, &self.data, &self.aad())
+            .open(&self.eph, &sealed, &self.aad())
             .ok_or(Refused::Unproven)?;
         serde_json::from_slice(&plain).map_err(|_| Refused::Unproven)
     }

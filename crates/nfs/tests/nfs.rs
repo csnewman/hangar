@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use hangar_nfs::{Config, Server, Squash, View};
 
@@ -17,6 +17,8 @@ struct Fixed {
     /// "set/path"
     hidden: HashSet<String>,
     squash: HashMap<String, Squash>,
+    /// The sets calls changed, as they were told.
+    changed: Mutex<Vec<String>>,
 }
 
 impl View for Fixed {
@@ -31,6 +33,10 @@ impl View for Fixed {
 
     fn squash(&self, set: &str) -> Squash {
         self.squash.get(set).copied().unwrap_or(Squash::All)
+    }
+
+    fn changed(&self, set: &str) {
+        self.changed.lock().unwrap().push(set.to_string());
     }
 }
 
@@ -113,19 +119,26 @@ impl Dec {
 struct Fixture {
     srv: Arc<Server>,
     root: PathBuf,
+    view: Arc<Fixed>,
 }
 
 impl Fixture {
     fn new(name: &str, v: Fixed) -> Fixture {
         let root = scratch(name);
+        let view = Arc::new(v);
         let srv = Server::new(Config {
             root: &root,
-            view: Arc::new(v),
+            view: view.clone(),
             uid: 1000,
             gid: 1000,
         })
         .unwrap();
-        Fixture { srv, root }
+        Fixture { srv, root, view }
+    }
+
+    /// The sets the view has been told calls changed since last asked.
+    fn changed(&self) -> Vec<String> {
+        std::mem::take(&mut *self.view.changed.lock().unwrap())
     }
 
     fn path(&self, p: &str) -> PathBuf {
@@ -405,6 +418,45 @@ fn files_through_the_view() {
     assert_eq!(d.opaque(), b"hello");
     assert_eq!(std::fs::read(f.path("mine/f")).unwrap(), b"hello");
     assert_eq!(list(&mut c, &["mine"]), ["f"], "the hidden file is listed");
+}
+
+// The view is told of each call that changes a set, and of nothing that
+// only reads one.
+#[test]
+fn changes_are_told() {
+    let f = Fixture::new("changes", sets(&["s"]));
+    f.make_set("s");
+    std::fs::write(f.path("s/old"), "x").unwrap();
+    let mut c = connect(&f, "a");
+    assert_eq!(list(&mut c, &["s"]), ["old"]);
+    assert!(f.changed().is_empty(), "a listing is told as a change");
+
+    let sid = c.open("s", "new");
+    assert!(
+        f.changed().contains(&"s".to_string()),
+        "a create is not told"
+    );
+    let mut d = c.run(|e| {
+        path(e, &["s", "new"]);
+        e.u32(38).fixed(&sid).u64(0).u32(2).opaque(b"hello");
+        4
+    });
+    for _ in 0..3 {
+        status(&mut d);
+    }
+    assert_eq!(status(&mut d), 0, "WRITE");
+    assert_eq!(f.changed(), ["s"], "a write is not told");
+
+    let mut d = c.run(|e| {
+        path(e, &["s"]);
+        e.u32(28).str("old"); // REMOVE
+        3
+    });
+    for _ in 0..2 {
+        status(&mut d);
+    }
+    assert_eq!(status(&mut d), 0, "REMOVE");
+    assert_eq!(f.changed(), ["s"], "a remove is not told");
 }
 
 // A lock is refused another client while one holds it, and free once that

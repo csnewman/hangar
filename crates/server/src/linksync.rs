@@ -1,6 +1,6 @@
 //! A linked person's records, kept the same in every place they link
-//! (docs/places.md §4.3): their theme, sign-in keys, SSH keys and own
-//! packs. Each place holds them in its own tables as ever, and keeps
+//! (docs/places.md §4.3): their theme, sign-in keys, SSH keys, own packs
+//! and the shared copies they own of those and the profile. Each place holds them in its own tables as ever, and keeps
 //! beside them (`link_records`) a version of each: the time of its last
 //! change on the places' shared clock and the place that made it, which
 //! together say which of two versions is newer, and a digest of its
@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::root::Root;
 use crate::seal::Sealer;
-use crate::store::rows::{LinkRecord, LoginKey, Pack, PackPath, SshKey};
+use crate::store::rows::{Copy, LinkRecord, LoginKey, Pack, PackPath, SshKey};
 use crate::store::{Result, Tx};
 
 /// What a place needs to read and write a person's records.
@@ -76,15 +76,43 @@ const THEME: &str = "theme";
 const LOGIN_KEY: &str = "login_key";
 const SSH_KEY: &str = "ssh_key";
 const PACK: &str = "pack";
+const COPY: &str = "copy";
 
 /// The kinds of record this place holds: SSH keys only with a secret key
 /// to seal them.
 fn kinds(here: &Here) -> Vec<&'static str> {
-    let mut k = vec![THEME, LOGIN_KEY, PACK];
+    let mut k = vec![THEME, LOGIN_KEY, PACK, COPY];
     if here.sealer.is_some() {
         k.push(SSH_KEY);
     }
     k
+}
+
+/// The order records are taken in: a pack before its copies.
+fn rank(kind: &str) -> u8 {
+    match kind {
+        PACK => 1,
+        COPY => 2,
+        _ => 0,
+    }
+}
+
+/// Whether a pack is one of the person's own, which linked places share.
+fn own_pack(p: &Pack, user: Uuid) -> bool {
+    p.owner_id == Some(user) && !p.builtin && p.team_id.is_none()
+}
+
+/// What a shared copy's pack is called between places: the profile, or
+/// the person's own pack by ID; none for any other.
+fn copy_pack(packs: &[Pack], c: &Copy, user: Uuid) -> Option<String> {
+    let p = packs.iter().find(|p| p.id == c.pack_id)?;
+    if p.builtin {
+        Some("profile".into())
+    } else if own_pack(p, user) {
+        Some(p.id.to_string())
+    } else {
+        None
+    }
 }
 
 /// Whether version a is newer than b: a later time, or the same time from
@@ -159,8 +187,20 @@ async fn snapshot(
         }
     }
     let paths = tx.pack_paths().await?;
-    for p in tx.packs().await? {
-        if p.owner_id != Some(user) || p.builtin || p.team_id.is_some() {
+    let packs = tx.packs().await?;
+    for c in tx.copies().await? {
+        if c.personal || c.owner_id != Some(user) || c.team_id.is_some() {
+            continue;
+        }
+        if let Some(pack) = copy_pack(&packs, &c, user) {
+            out.insert(
+                (COPY.into(), c.id.to_string()),
+                json!({ "pack": pack, "name": c.name }),
+            );
+        }
+    }
+    for p in packs {
+        if !own_pack(&p, user) {
             continue;
         }
         let mut ps: Vec<(String, bool)> = paths
@@ -358,6 +398,8 @@ pub async fn accept(tx: &mut Tx, here: &Here<'_>, user: Uuid, records: &[Record]
         .collect();
     let mut taken = 0;
     let mut removed_copies = vec![];
+    let mut records: Vec<&Record> = records.iter().collect();
+    records.sort_by_key(|r| rank(&r.version.kind));
     for r in records {
         let v = &r.version;
         if !kinds.contains(&v.kind.as_str()) {
@@ -594,6 +636,60 @@ async fn apply(
                 .unwrap_or_default();
             tx.set_pack_paths(pack_id, &paths).await?;
             Ok(true)
+        }
+        COPY => {
+            let Ok(copy_id) = Uuid::parse_str(id) else {
+                return Ok(false);
+            };
+            let existing = tx.copies().await?.into_iter().find(|c| c.id == copy_id);
+            if existing
+                .as_ref()
+                .is_some_and(|c| c.personal || c.owner_id != Some(user) || c.team_id.is_some())
+            {
+                return Ok(false);
+            }
+            let Some(b) = body else {
+                if existing.is_some() {
+                    tx.delete_copy(copy_id).await?;
+                    removed_copies.push(copy_id);
+                }
+                return Ok(true);
+            };
+            let packs = tx.packs().await?;
+            let pack = match b["pack"].as_str() {
+                Some("profile") => packs.iter().find(|p| p.builtin).map(|p| p.id),
+                Some(p) => Uuid::parse_str(p)
+                    .ok()
+                    .filter(|id| packs.iter().any(|k| k.id == *id && own_pack(k, user))),
+                None => None,
+            };
+            let name = text(b, "name");
+            let Some(pack) = pack.filter(|_| !name.trim().is_empty()) else {
+                return Ok(false);
+            };
+            let now = Utc::now();
+            match existing {
+                Some(c) if c.pack_id != pack => Ok(false),
+                Some(c) => {
+                    if c.name != name {
+                        tx.rename_copy(copy_id, &name, now).await?;
+                    }
+                    Ok(true)
+                }
+                None => {
+                    tx.insert_copy(&Copy {
+                        id: copy_id,
+                        pack_id: pack,
+                        owner_id: Some(user),
+                        team_id: None,
+                        personal: false,
+                        name,
+                        created_at: now,
+                        updated_at: now,
+                    })
+                    .await
+                }
+            }
         }
         _ => Ok(false),
     }

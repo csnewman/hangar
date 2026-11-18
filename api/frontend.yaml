@@ -473,6 +473,47 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/frontend/copies/{id}/history:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: listCopyHistory
+      description: >-
+        The versions of the copy's files that a change made in a linked place
+        replaced, where this place's change and that one were made without
+        either having seen the other. Each is kept for 7 days, and the latest
+        5 of a file.
+      responses:
+        "200":
+          description: The versions, the latest replaced first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ReplacedFile" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/copies/{id}/history/{entry}/restore:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: entry
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: restoreCopyFile
+      description: >-
+        Put a replaced version back in the copy, as a change made here, which
+        reaches every running environment using the copy and every linked
+        place. The version it replaces is kept in its stead.
+      responses:
+        "204":
+          description: Restored.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/frontend/me/profile/login-keys:
     post:
       operationId: addLoginKey
@@ -1983,6 +2024,33 @@ components:
             Under a path the pack shares. A copy keeps a file the pack stopped
             sharing until someone deletes it.
         updated_at: { type: string, format: date-time }
+
+    ReplacedFile:
+      type: object
+      required: [id, path, size, mode, replaced_at, kept_until, by_here]
+      properties:
+        id: { type: string }
+        path:
+          type: string
+          description: The file's path, ~/ in the home directory or absolute.
+        size: { type: integer }
+        mode: { type: integer }
+        changed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the version kept was made.
+        replaced_at: { type: string, format: date-time }
+        kept_until: { type: string, format: date-time }
+        by:
+          type: string
+          nullable: true
+          description: >-
+            The name of the linked place whose change replaced it, when this
+            place is linked with it directly.
+        by_here:
+          type: boolean
+          description: Replaced here, by restoring another version.
 
     PackFileMode:
       type: object

@@ -158,6 +158,12 @@ impl Server {
         format!("http://127.0.0.1:{}", self.port)
     }
 
+    /// The files root it keeps copies' files in, as its workers' NFS
+    /// servers write them.
+    pub fn files_dir(&self) -> PathBuf {
+        self.dir.join("files")
+    }
+
     /// Where its SSH gateway listens.
     pub fn ssh_addr(&self) -> SocketAddr {
         SocketAddr::from(([127, 0, 0, 1], self.ssh_port))

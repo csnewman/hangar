@@ -441,6 +441,9 @@ impl Server {
         };
         drop(inner);
 
+        if how == OPEN_CREATE {
+            self.changed(&p);
+        }
         cs.cur = p;
         cs.cur_state = id;
         write_stateid(w, id);

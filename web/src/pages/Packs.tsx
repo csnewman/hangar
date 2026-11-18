@@ -5,7 +5,7 @@ import { FolderSync, Lock, Plus, Undo2, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 
-import { api, type Copy, type Pack, type PackInput, type PackPath, type PackRef } from '../api'
+import { api, type Copy, type Pack, type PackInput, type PackPath, type PackRef, type ReplacedFile } from '../api'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { FileBrowser, type FileSource } from '../components/FileBrowser'
 import {
@@ -127,6 +127,70 @@ function CopyFiles({ copy, pack }: { copy: string; pack: Pack }) {
       )}
       <FileBrowser source={source} files={files.data.files} paths={shared} open={open} onOpen={setOpen} />
     </>
+  )
+}
+
+// replacedBy says whose change replaced a kept version.
+function replacedBy(r: ReplacedFile): string {
+  if (r.by_here) return 'Replaced by a restore'
+  return r.by ? `Replaced by ${r.by}'s newer change` : "Replaced by another place's newer change"
+}
+
+// Replaced lists the versions of a copy's files that a linked place's
+// newer change replaced, where the two changes were made apart, each kept
+// for 7 days with Restore. Shown only while there are any.
+function Replaced({ copy }: { copy: string }) {
+  const qc = useQueryClient()
+  const key = useMemo(() => ['copy', copy, 'history'] as const, [copy])
+  const history = useQuery({ queryKey: key, queryFn: () => api.copyHistory(copy), refetchInterval: 10000 })
+  const restore = useMutation({
+    mutationFn: (entry: string) => api.restoreCopyFile(copy, entry),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: key })
+      void qc.invalidateQueries({ queryKey: ['copy', copy] })
+    },
+  })
+  const rows = history.data ?? []
+  if (rows.length === 0) return null
+  return (
+    <Section title="Replaced by Another Place">
+      <p className="pane-hint">
+        When a file changed here and in a linked place at once, the newer change is kept everywhere and the other is
+        kept here for 7 days.
+      </p>
+      <table className="pane-table">
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Replaced</th>
+            <th />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id}>
+              <td>
+                <code>{r.path}</code>
+              </td>
+              <td className="muted">
+                {replacedBy(r)} · kept until {new Date(r.kept_until).toLocaleDateString()}
+              </td>
+              <td className="num">
+                <button
+                  type="button"
+                  className="pane-link"
+                  disabled={restore.isPending}
+                  onClick={() => restore.mutate(r.id)}
+                >
+                  Restore
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {restore.error && <div className="alert">{restore.error.message}</div>}
+    </Section>
   )
 }
 
@@ -658,6 +722,7 @@ function PackBody({
           {current && copies.length <= 1 && <p className="pane-hint">{copyName(current, me.id)} copy</p>}
           {chosen && <CopyFiles key={chosen} copy={chosen} pack={pack} />}
         </Section>
+        {chosen && <Replaced key={chosen} copy={chosen} />}
       </DetailPage>
       {!disabled && (changed.length > 0 || save.error) && (
         <ApplyBar

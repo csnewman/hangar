@@ -1,15 +1,18 @@
 //! Linked places' connections (docs/places.md §4.5): one WebSocket for
 //! each linked person and pair of places, dialled by whichever side can
 //! reach the other and kept open while both are up. Over it each side
-//! sends the person's records as soon as they change, and both exchange
-//! them in full on connecting and every hour (`linksync`). Every message
-//! is `Sealed`: signed by its sender and sealed to its recipient.
+//! sends the person's records (`linksync`) and their copies' files
+//! (`linkfiles`) as soon as they change, and both compare them in full on
+//! connecting and every hour. Every message is `Sealed`: signed by its
+//! sender and sealed to its recipient; a file goes in binary messages of
+//! a piece each, sent by a task of the connection's own, so a large one
+//! holds up nothing else.
 //!
 //! Both places of a link try to hold one connection, each dialling while
 //! there is none, backing off while it cannot. Two dialled at once settle
 //! on the one dialled by the place of lower ID.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -23,6 +26,7 @@ use uuid::Uuid;
 
 use crate::http::App;
 use crate::link::{LEVELS, Place, Refused, Sealed};
+use crate::linkfiles::{FilePiece, FileVersions, FileWant, Job, MAX_FILE, PIECE};
 use crate::linksync::{Exchange, Here, Records, Versions};
 use crate::store::Error as StoreError;
 use crate::store::rows::Link;
@@ -58,6 +62,10 @@ type Key = (Uuid, Uuid);
 enum Cmd {
     /// Send the person's versions: their records may have changed.
     Offer,
+    /// Send the versions of the person's files.
+    OfferFiles,
+    /// Send these files.
+    Files(Vec<Job>),
     Close,
 }
 
@@ -141,6 +149,29 @@ impl Conns {
         }
     }
 
+    /// Has each of a person's connections, but the one to the place
+    /// except, send these files.
+    pub fn files(&self, user: Uuid, except: Option<Uuid>, jobs: Vec<Job>) {
+        if jobs.is_empty() {
+            return;
+        }
+        for ((u, other), l) in self.live.lock().unwrap().iter() {
+            if *u == user && Some(*other) != except {
+                let _ = l.tx.send(Cmd::Files(jobs.clone()));
+            }
+        }
+    }
+
+    /// Has each of a person's connections send the versions of their
+    /// files.
+    pub fn offer_files(&self, user: Uuid) {
+        for ((u, _), l) in self.live.lock().unwrap().iter() {
+            if *u == user {
+                let _ = l.tx.send(Cmd::OfferFiles);
+            }
+        }
+    }
+
     fn close(&self, key: Key) {
         if let Some(l) = self.live.lock().unwrap().remove(&key) {
             let _ = l.tx.send(Cmd::Close);
@@ -151,6 +182,7 @@ impl Conns {
 /// What a connection carries, whichever side of it this place is.
 enum Frame {
     Text(String),
+    Binary(Vec<u8>),
     Ping,
     Pong,
     /// Closing, and why (a refusal's code).
@@ -158,9 +190,10 @@ enum Frame {
 }
 
 /// A connection's two directions, as channels, from a WebSocket of either
-/// side.
+/// side. What arrives is never held up, so two places sending each other
+/// files at once both carry on.
 struct Wire {
-    rx: mpsc::Receiver<Frame>,
+    rx: mpsc::UnboundedReceiver<Frame>,
     tx: mpsc::Sender<Frame>,
 }
 
@@ -175,24 +208,23 @@ impl Wire {
         use tokio_tungstenite::tungstenite::protocol::CloseFrame;
         use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
         let (mut sink, mut stream) = ws.split();
-        let (in_tx, in_rx) = mpsc::channel(16);
+        let (in_tx, in_rx) = mpsc::unbounded_channel();
         let (out_tx, mut out_rx) = mpsc::channel::<Frame>(16);
         tokio::spawn(async move {
             while let Some(m) = stream.next().await {
                 let f = match m {
                     Ok(Message::Text(t)) => Frame::Text(t.to_string()),
+                    Ok(Message::Binary(b)) => Frame::Binary(b.to_vec()),
                     Ok(Message::Ping(_)) => Frame::Ping,
                     Ok(Message::Pong(_)) => Frame::Pong,
                     Ok(Message::Close(c)) => {
-                        let _ = in_tx
-                            .send(Frame::Close(c.map(|c| c.reason.to_string())))
-                            .await;
+                        let _ = in_tx.send(Frame::Close(c.map(|c| c.reason.to_string())));
                         return;
                     }
                     Ok(_) => continue,
                     Err(_) => return,
                 };
-                if in_tx.send(f).await.is_err() {
+                if in_tx.send(f).is_err() {
                     return;
                 }
             }
@@ -201,6 +233,7 @@ impl Wire {
             while let Some(f) = out_rx.recv().await {
                 let m = match f {
                     Frame::Text(t) => Message::Text(t.into()),
+                    Frame::Binary(b) => Message::Binary(b.into()),
                     Frame::Ping => Message::Ping(Vec::new().into()),
                     Frame::Pong => Message::Pong(Vec::new().into()),
                     Frame::Close(why) => {
@@ -229,24 +262,22 @@ impl Wire {
     fn server(ws: axum::extract::ws::WebSocket) -> Wire {
         use axum::extract::ws::{CloseFrame, Message};
         let (mut sink, mut stream) = ws.split();
-        let (in_tx, in_rx) = mpsc::channel(16);
+        let (in_tx, in_rx) = mpsc::unbounded_channel();
         let (out_tx, mut out_rx) = mpsc::channel::<Frame>(16);
         tokio::spawn(async move {
             while let Some(m) = stream.next().await {
                 let f = match m {
                     Ok(Message::Text(t)) => Frame::Text(t.to_string()),
+                    Ok(Message::Binary(b)) => Frame::Binary(b.to_vec()),
                     Ok(Message::Ping(_)) => Frame::Ping,
                     Ok(Message::Pong(_)) => Frame::Pong,
                     Ok(Message::Close(c)) => {
-                        let _ = in_tx
-                            .send(Frame::Close(c.map(|c| c.reason.to_string())))
-                            .await;
+                        let _ = in_tx.send(Frame::Close(c.map(|c| c.reason.to_string())));
                         return;
                     }
-                    Ok(_) => continue,
                     Err(_) => return,
                 };
-                if in_tx.send(f).await.is_err() {
+                if in_tx.send(f).is_err() {
                     return;
                 }
             }
@@ -255,6 +286,7 @@ impl Wire {
             while let Some(f) = out_rx.recv().await {
                 let m = match f {
                     Frame::Text(t) => Message::Text(t.into()),
+                    Frame::Binary(b) => Message::Binary(b.into()),
                     Frame::Ping => Message::Ping(Vec::new().into()),
                     Frame::Pong => Message::Pong(Vec::new().into()),
                     Frame::Close(why) => {
@@ -451,7 +483,7 @@ async fn keep(app: Arc<App>, place: Arc<Place>, key: Key) {
         let failed = match dial(&place, person, &link).await {
             Ok(Some(wire)) => match app.link_conns.take(key, place.id) {
                 Some((held, cmds)) => {
-                    serve(&app, &place, person, link, wire, held, cmds, true).await;
+                    serve(&app, place.clone(), person, link, wire, held, cmds, true).await;
                     wait = RETRY_FIRST;
                     None
                 }
@@ -614,17 +646,17 @@ pub async fn accept(app: Arc<App>, socket: axum::extract::ws::WebSocket) {
     if !wire.send_sealed(&answer).await {
         return;
     }
-    serve(&app, &place, msg.person, link, wire, held, cmds, false).await;
+    serve(&app, place, msg.person, link, wire, held, cmds, false).await;
 }
 
-/// Carries a connection until it ends: the person's versions sent on
-/// connecting, whenever their records change and every hour; the other's
-/// messages answered as they come; pings to keep it, and an end when the
-/// other falls silent.
+/// Carries a connection until it ends: the person's versions of records
+/// and files sent on connecting, whenever their records change and every
+/// hour, and their files as they change; the other's messages answered as
+/// they come; pings to keep it, and an end when the other falls silent.
 #[allow(clippy::too_many_arguments)]
 async fn serve(
     app: &Arc<App>,
-    place: &Place,
+    place: Arc<Place>,
     person: Uuid,
     link: Link,
     mut wire: Wire,
@@ -633,22 +665,54 @@ async fn serve(
     dialled: bool,
 ) {
     let (user, other) = (link.user_id, link.place_id);
-    let here = here(app, place);
+    let here = here(app, &place);
     let mut exchanged = false;
     record(app, user, other, dialled, exchanged).await;
     let mut recorded = Instant::now();
-    if let Err(e) = offer(app, place, &here, person, &link, &wire).await {
+    let out = outbox(
+        app.clone(),
+        place.clone(),
+        person,
+        link.clone(),
+        wire.tx.clone(),
+    );
+    let mut incoming = Incoming::default();
+    let c = Conn {
+        app,
+        place: &place,
+        here: &here,
+        person,
+        link: &link,
+        wire: &wire,
+        out: &out,
+    };
+    if let Err(e) = offer(&c).await {
         eprintln!("hangar-server: sending to a linked place: {e}");
+    }
+    // The side that dialled lists its files; the other answers with what
+    // it wants and has newer, which covers both ways.
+    if dialled && let Err(e) = offer_files(&c).await {
+        eprintln!("hangar-server: sending files' versions to a linked place: {e}");
     }
     let mut ping = tokio::time::interval_at(Instant::now() + PING, PING);
     let mut full = tokio::time::interval_at(Instant::now() + FULL, FULL);
     let mut heard = Instant::now();
+    let mut rx = std::mem::replace(&mut wire.rx, mpsc::unbounded_channel().1);
     loop {
+        let c = Conn {
+            app,
+            place: &place,
+            here: &here,
+            person,
+            link: &link,
+            wire: &wire,
+            out: &out,
+        };
         tokio::select! {
-            f = wire.recv() => match f {
+            f = rx.recv() => match f {
                 Some(Frame::Text(t)) => {
                     heard = Instant::now();
-                    match answer(app, place, &here, person, &link, &wire, &t).await {
+                    match answer(&c, &t).await {
                         Ok(true) => {
                             exchanged = true;
                             record(app, user, other, dialled, exchanged).await;
@@ -658,13 +722,29 @@ async fn serve(
                         Err(e) => eprintln!("hangar-server: a linked place's message: {e}"),
                     }
                 }
+                Some(Frame::Binary(b)) => {
+                    heard = Instant::now();
+                    if let Err(e) = piece(&c, &b, &mut incoming).await {
+                        eprintln!("hangar-server: a linked place's file: {e}");
+                    }
+                }
                 Some(Frame::Ping | Frame::Pong) => heard = Instant::now(),
                 Some(Frame::Close(_)) | None => break,
             },
-            c = cmds.recv() => match c {
+            cmd = cmds.recv() => match cmd {
                 Some(Cmd::Offer) => {
-                    if let Err(e) = offer(app, place, &here, person, &link, &wire).await {
+                    if let Err(e) = offer(&c).await {
                         eprintln!("hangar-server: sending to a linked place: {e}");
+                    }
+                }
+                Some(Cmd::OfferFiles) => {
+                    if let Err(e) = offer_files(&c).await {
+                        eprintln!("hangar-server: sending files' versions to a linked place: {e}");
+                    }
+                }
+                Some(Cmd::Files(jobs)) => {
+                    for j in jobs {
+                        let _ = out.send(j);
                     }
                 }
                 Some(Cmd::Close) | None => break,
@@ -679,14 +759,188 @@ async fn serve(
                 }
             }
             _ = full.tick() => {
-                if let Err(e) = offer(app, place, &here, person, &link, &wire).await {
+                if let Err(e) = offer(&c).await {
                     eprintln!("hangar-server: sending to a linked place: {e}");
+                }
+                if dialled && let Err(e) = offer_files(&c).await {
+                    eprintln!("hangar-server: sending files' versions to a linked place: {e}");
                 }
             }
         }
     }
     drop(held);
     wire.send(Frame::Close(None)).await;
+}
+
+/// What a connection's messages are answered with.
+struct Conn<'a> {
+    app: &'a App,
+    place: &'a Place,
+    here: &'a Here<'a>,
+    person: Uuid,
+    link: &'a Link,
+    wire: &'a Wire,
+    out: &'a mpsc::UnboundedSender<Job>,
+}
+
+/// Sends files over a connection, a piece at a time, each file read as
+/// its turn comes, so one changed while it waits goes as it is then, and
+/// one asked for again while it waits goes once.
+fn outbox(
+    app: Arc<App>,
+    place: Arc<Place>,
+    person: Uuid,
+    link: Link,
+    tx: mpsc::Sender<Frame>,
+) -> mpsc::UnboundedSender<Job> {
+    let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<Job>();
+    tokio::spawn(async move {
+        let mut queue: VecDeque<Job> = VecDeque::new();
+        let add = |queue: &mut VecDeque<Job>, j: Job| match queue
+            .iter_mut()
+            .find(|q| q.copy == j.copy && q.path == j.path)
+        {
+            Some(q) => q.content |= j.content,
+            None => queue.push_back(j),
+        };
+        loop {
+            if queue.is_empty() {
+                match jobs.recv().await {
+                    Some(j) => add(&mut queue, j),
+                    None => return,
+                }
+            }
+            while let Ok(j) = jobs.try_recv() {
+                add(&mut queue, j);
+            }
+            let Some(job) = queue.pop_front() else {
+                continue;
+            };
+            match crate::linkfiles::read(&app, link.user_id, &job).await {
+                Ok(Some((piece, data))) => {
+                    if let Err(e) = send_file(&place, person, &link, &tx, piece, &data).await {
+                        if e.is_empty() {
+                            return;
+                        }
+                        eprintln!("hangar-server: sending a file to a linked place: {e}");
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("hangar-server: reading a file for a linked place: {e}"),
+            }
+        }
+    });
+    jobs_tx
+}
+
+/// Sends a file in pieces, or its version alone; an empty error when the
+/// connection has ended.
+async fn send_file(
+    place: &Place,
+    person: Uuid,
+    link: &Link,
+    tx: &mpsc::Sender<Frame>,
+    mut piece: FilePiece,
+    data: &[u8],
+) -> Result<(), String> {
+    let pieces: Vec<&[u8]> = if data.is_empty() {
+        vec![&[]]
+    } else {
+        data.chunks(PIECE).collect()
+    };
+    for (i, bytes) in pieces.into_iter().enumerate() {
+        piece.offset = (i * PIECE) as u64;
+        let frame = Sealed::make_binary(
+            place,
+            "file",
+            link.place_id,
+            &link.public_key,
+            person,
+            &piece,
+            bytes,
+        )?;
+        if tx.send(Frame::Binary(frame)).await.is_err() {
+            return Err(String::new());
+        }
+    }
+    Ok(())
+}
+
+/// Files coming in, by copy and path, until each is whole.
+#[derive(Default)]
+struct Incoming(HashMap<(String, String), (FilePiece, Vec<u8>)>);
+
+/// Takes a piece of a file the other place sent; once it is whole, the
+/// file. What is taken goes on to the person's other places.
+async fn piece(c: &Conn<'_>, frame: &[u8], incoming: &mut Incoming) -> Result<(), String> {
+    let (msg, body) = Sealed::parse_binary(frame).ok_or("a message that cannot be read")?;
+    if msg.from != c.link.place_id || msg.person != c.person {
+        return Err("a message from another place, or for another person".into());
+    }
+    let (p, bytes): (FilePiece, Vec<u8>) = msg
+        .read_binary(body, c.place, "file", &c.link.public_key)
+        .map_err(|r| format!("it could not be read: {r:?}"))?;
+    let whole = if !p.content {
+        Some((p, vec![]))
+    } else if p.version.size > MAX_FILE {
+        None
+    } else {
+        let key = (p.copy.clone(), p.path.clone());
+        if p.offset == 0 {
+            incoming.0.insert(key.clone(), (p, bytes));
+        } else {
+            match incoming.0.get_mut(&key) {
+                Some((q, data)) if q.version == p.version && data.len() as u64 == p.offset => {
+                    data.extend_from_slice(&bytes);
+                }
+                _ => {
+                    incoming.0.remove(&key);
+                    return Ok(());
+                }
+            }
+        }
+        if incoming
+            .0
+            .get(&key)
+            .is_some_and(|(q, d)| d.len() as u64 >= q.version.size)
+        {
+            incoming.0.remove(&key)
+        } else {
+            None
+        }
+    };
+    let Some((p, data)) = whole else {
+        return Ok(());
+    };
+    let user = c.link.user_id;
+    let t = crate::linkfiles::take(c.app, c.place.id, user, &p, &data).await?;
+    for j in t.reply {
+        let _ = c.out.send(j);
+    }
+    if !t.want.is_empty() {
+        let msg = sealed(
+            c.place,
+            "file_want",
+            c.person,
+            c.link,
+            &FileWant { want: t.want },
+        )?;
+        c.wire.send_sealed(&msg).await;
+    }
+    c.app.link_conns.files(user, Some(c.link.place_id), t.relay);
+    c.app.link_conns.files(user, None, t.found);
+    Ok(())
+}
+
+/// Sends the versions of the person's files, having looked for changes
+/// to them first; a change found goes to their other connections too.
+async fn offer_files(c: &Conn<'_>) -> Result<(), String> {
+    let user = c.link.user_id;
+    let (versions, found) = crate::linkfiles::versions(c.app, c.place.id, user).await?;
+    c.app.link_conns.files(user, Some(c.link.place_id), found);
+    let msg = sealed(c.place, "file_versions", c.person, c.link, &versions)?;
+    c.wire.send_sealed(&msg).await;
+    Ok(())
 }
 
 /// Writes down that the link is connected: reached by the side that
@@ -733,19 +987,12 @@ fn sealed<T: Serialize>(
 
 /// Sends the person's versions, having noticed any change first; a change
 /// found goes to their other connections too.
-async fn offer(
-    app: &App,
-    place: &Place,
-    here: &Here<'_>,
-    person: Uuid,
-    link: &Link,
-    wire: &Wire,
-) -> Result<(), String> {
-    let user = link.user_id;
+async fn offer(c: &Conn<'_>) -> Result<(), String> {
+    let user = c.link.user_id;
     let (changed, versions) = async {
-        let mut tx = app.store.begin().await?;
+        let mut tx = c.app.store.begin().await?;
         tx.lock_link_records(user).await?;
-        let changed = crate::linksync::scan(&mut tx, here, user).await?;
+        let changed = crate::linksync::scan(&mut tx, c.here, user).await?;
         let v = crate::linksync::versions(&mut tx, user).await?;
         tx.commit().await?;
         Ok::<_, StoreError>((changed, v))
@@ -753,37 +1000,34 @@ async fn offer(
     .await
     .map_err(|e| e.to_string())?;
     if changed {
-        app.link_conns.offer(user, Some(link.place_id));
+        c.app.link_conns.offer(user, Some(c.link.place_id));
     }
-    let msg = sealed(place, "versions", person, link, &Versions { versions })?;
-    wire.send_sealed(&msg).await;
+    let msg = sealed(
+        c.place,
+        "versions",
+        c.person,
+        c.link,
+        &Versions { versions },
+    )?;
+    c.wire.send_sealed(&msg).await;
     Ok(())
 }
 
 /// Answers one of the other's messages: its versions with what this place
 /// wants and has newer; its answer to this place's with the records it
-/// wanted; records with taking them. Gives whether an exchange of records
-/// finished.
-async fn answer(
-    app: &App,
-    place: &Place,
-    here: &Here<'_>,
-    person: Uuid,
-    link: &Link,
-    wire: &Wire,
-    text: &str,
-) -> Result<bool, String> {
+/// wanted; records with taking them; its files' versions with the files
+/// this place wants and those it has newer; files wanted with sending
+/// them. Gives whether an exchange of records finished.
+async fn answer(c: &Conn<'_>, text: &str) -> Result<bool, String> {
     let msg: Sealed = serde_json::from_str(text).map_err(|e| e.to_string())?;
-    if msg.from != link.place_id || msg.person != person {
+    if msg.from != c.link.place_id || msg.person != c.person {
         return Err("a message from another place, or for another person".into());
     }
-    let user = link.user_id;
+    let (app, here, user, key) = (c.app, c.here, c.link.user_id, &c.link.public_key);
     let unread = |r: Refused| format!("it could not be read: {r:?}");
     match msg.kind.as_str() {
         "versions" => {
-            let theirs: Versions = msg
-                .read(place, "versions", &link.public_key)
-                .map_err(unread)?;
+            let theirs: Versions = msg.read(c.place, "versions", key).map_err(unread)?;
             let (changed, ex) = async {
                 let mut tx = app.store.begin().await?;
                 tx.lock_link_records(user).await?;
@@ -795,16 +1039,15 @@ async fn answer(
             .await
             .map_err(|e| e.to_string())?;
             if changed {
-                app.link_conns.offer(user, Some(link.place_id));
+                app.link_conns.offer(user, Some(c.link.place_id));
             }
-            wire.send_sealed(&sealed(place, "exchange", person, link, &ex)?)
+            c.wire
+                .send_sealed(&sealed(c.place, "exchange", c.person, c.link, &ex)?)
                 .await;
             Ok(false)
         }
         "exchange" => {
-            let ex: Exchange = msg
-                .read(place, "exchange", &link.public_key)
-                .map_err(unread)?;
+            let ex: Exchange = msg.read(c.place, "exchange", key).map_err(unread)?;
             let (taken, wanted) = async {
                 let mut tx = app.store.begin().await?;
                 tx.lock_link_records(user).await?;
@@ -816,18 +1059,24 @@ async fn answer(
             .await
             .map_err(|e| e.to_string())?;
             if taken > 0 {
-                app.link_conns.offer(user, Some(link.place_id));
+                app.link_conns.offer(user, Some(c.link.place_id));
+                // A copy or pack taken may hold files to compare.
+                app.link_conns.offer_files(user);
             }
             if !wanted.is_empty() {
-                let msg = sealed(place, "records", person, link, &Records { records: wanted })?;
-                wire.send_sealed(&msg).await;
+                let msg = sealed(
+                    c.place,
+                    "records",
+                    c.person,
+                    c.link,
+                    &Records { records: wanted },
+                )?;
+                c.wire.send_sealed(&msg).await;
             }
             Ok(true)
         }
         "records" => {
-            let sent: Records = msg
-                .read(place, "records", &link.public_key)
-                .map_err(unread)?;
+            let sent: Records = msg.read(c.place, "records", key).map_err(unread)?;
             let taken = async {
                 let mut tx = app.store.begin().await?;
                 tx.lock_link_records(user).await?;
@@ -838,9 +1087,36 @@ async fn answer(
             .await
             .map_err(|e| e.to_string())?;
             if taken > 0 {
-                app.link_conns.offer(user, Some(link.place_id));
+                app.link_conns.offer(user, Some(c.link.place_id));
+                app.link_conns.offer_files(user);
             }
             Ok(true)
+        }
+        "file_versions" => {
+            let theirs: FileVersions = msg.read(c.place, "file_versions", key).map_err(unread)?;
+            let found = crate::linkfiles::compare(app, c.place.id, user, &theirs).await?;
+            if !found.want.is_empty() {
+                let want = FileWant { want: found.want };
+                let msg = sealed(c.place, "file_want", c.person, c.link, &want)?;
+                c.wire.send_sealed(&msg).await;
+            }
+            for j in found.send {
+                let _ = c.out.send(j);
+            }
+            app.link_conns
+                .files(user, Some(c.link.place_id), found.found);
+            Ok(false)
+        }
+        "file_want" => {
+            let w: FileWant = msg.read(c.place, "file_want", key).map_err(unread)?;
+            for (copy, path) in w.want {
+                let _ = c.out.send(Job {
+                    copy,
+                    path,
+                    content: true,
+                });
+            }
+            Ok(false)
         }
         _ => Ok(false),
     }

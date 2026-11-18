@@ -41,7 +41,7 @@ const MAX_COPY_SIZE: u64 = 64 << 20;
 /// Names files written beside one they replace: this server's, and
 /// hangarfs's for a save renamed over a routed name. They are not a copy's
 /// files.
-const STAGING: &str = ".hangarfs-";
+pub const STAGING: &str = ".hangarfs-";
 
 /// One of a pack's paths.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
@@ -491,6 +491,12 @@ async fn personal(tx: &mut Tx, w: &mut World, pack: Uuid, user: Uuid) -> StoreRe
         .ok_or_else(|| StoreError("a personal copy could not be made".into()))
 }
 
+/// A person's own copy of a pack, made if it is not yet, in tx.
+pub async fn personal_copy(tx: &mut Tx, pack: Uuid, user: Uuid) -> StoreResult<Uuid> {
+    let mut w = World::load(tx).await?;
+    personal(tx, &mut w, pack, user).await
+}
+
 /// The copy a person uses of a pack by default: one they chose that they
 /// may still use, or their own.
 async fn default_copy(tx: &mut Tx, w: &mut World, pack: Uuid, user: Uuid) -> StoreResult<Uuid> {
@@ -796,11 +802,14 @@ pub async fn copies_of(store: &Store, user: Uuid) -> StoreResult<Vec<Uuid>> {
         .collect())
 }
 
-/// Removes copies' files, once the copies are gone.
+/// Removes copies' files, and what linking keeps beside them, once the
+/// copies are gone.
 pub fn remove_copies(root: &Root, ids: &[Uuid]) -> fail::Result<()> {
     for id in ids {
         root.remove_all(&id.to_string())
             .map_err(|e| StoreError(format!("removing copy {id}'s files: {e}")))?;
+        crate::linkfiles::forget(root, *id)
+            .map_err(|e| StoreError(format!("removing copy {id}'s link versions: {e}")))?;
     }
     Ok(())
 }
@@ -1104,6 +1113,36 @@ async fn record_file(
     tx.signal(Signal::Shared);
     tx.commit().await?;
     Ok(())
+}
+
+/// Records that a replaced version of a file was put back in its copy.
+pub async fn record_restore(
+    store: &Store,
+    p: &Principal,
+    ip: &str,
+    copy: Uuid,
+    path: &str,
+) -> fail::Result<()> {
+    let c = copy_view(store, p, copy).await?;
+    let key = if path.starts_with(HOME) {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    record_file(
+        store,
+        p,
+        ip,
+        "pack_copy.file_restore",
+        &c,
+        &key,
+        serde_json::json!({}),
+    )
+    .await
+}
+
+async fn copy_view(store: &Store, p: &Principal, id: Uuid) -> fail::Result<CopyView> {
+    Ok(copy_and_paths(store, p, id).await?.0)
 }
 
 /// Writes a file at a path the pack shares, giving it as stored. A mode

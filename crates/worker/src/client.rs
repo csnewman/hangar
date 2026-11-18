@@ -7,7 +7,9 @@ use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use hangar_api::{DesiredSet, EnvironmentFiles, RegisterWorker, WorkerCredential, WorkerStatus};
+use hangar_api::{
+    DesiredSet, EnvironmentFiles, FilesChanged, RegisterWorker, WorkerCredential, WorkerStatus,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -150,6 +152,22 @@ impl Client {
             None::<&()>,
         )
         .await
+    }
+
+    /// Tells the server of the copies an environment's calls changed.
+    pub async fn files_changed(&self, id: &str, sets: Vec<String>) -> Result<(), Error> {
+        let _: Option<serde_json::Value> = self
+            .call(
+                "POST",
+                &format!(
+                    "/api/worker/v1/environments/{}/files/changed",
+                    path_escape(id)
+                ),
+                &self.credential(),
+                Some(&FilesChanged { sets }),
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn report(&self, st: &WorkerStatus) -> Result<(), Error> {

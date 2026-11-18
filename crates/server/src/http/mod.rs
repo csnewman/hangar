@@ -50,6 +50,9 @@ pub struct App {
     pub links_wake: Arc<tokio::sync::Notify>,
     /// The connections to linked places this place holds.
     pub link_conns: Arc<crate::linkconn::Conns>,
+    /// The linked copies changed here, and the people whose files are
+    /// being linked.
+    pub link_files: Arc<crate::linkfiles::Files>,
 }
 
 impl App {
@@ -67,6 +70,7 @@ impl App {
             place,
             links_wake: Arc::default(),
             link_conns: Arc::default(),
+            link_files: Arc::default(),
             store,
             cfg,
             rules: access::Rules::from_specs(),

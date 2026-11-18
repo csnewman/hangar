@@ -333,6 +333,45 @@ export interface paths {
         patch: operations["setCopyFileMode"];
         trace?: never;
     };
+    "/api/frontend/copies/{id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** @description The versions of the copy's files that a change made in a linked place replaced, where this place's change and that one were made without either having seen the other. Each is kept for 7 days, and the latest 5 of a file. */
+        get: operations["listCopyHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/copies/{id}/history/{entry}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                entry: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Put a replaced version back in the copy, as a change made here, which reaches every running environment using the copy and every linked place. The version it replaces is kept in its stead. */
+        post: operations["restoreCopyFile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/me/profile/login-keys": {
         parameters: {
             query?: never;
@@ -1410,6 +1449,26 @@ export interface components {
             shared: boolean;
             /** Format: date-time */
             updated_at: string;
+        };
+        ReplacedFile: {
+            id: string;
+            /** @description The file's path, ~/ in the home directory or absolute. */
+            path: string;
+            size: number;
+            mode: number;
+            /**
+             * Format: date-time
+             * @description When the version kept was made.
+             */
+            changed_at?: string | null;
+            /** Format: date-time */
+            replaced_at: string;
+            /** Format: date-time */
+            kept_until: string;
+            /** @description The name of the linked place whose change replaced it, when this place is linked with it directly. */
+            by?: string | null;
+            /** @description Replaced here, by restoring another version. */
+            by_here: boolean;
         };
         PackFileMode: {
             /** @description Its permissions, as chmod takes them (0o600 is 384). */
@@ -2856,6 +2915,54 @@ export interface operations {
                 };
             };
             400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listCopyHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The versions, the latest replaced first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReplacedFile"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    restoreCopyFile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                entry: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Restored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

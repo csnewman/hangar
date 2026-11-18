@@ -4,7 +4,7 @@
 
 use axum::extract::{Path, RawQuery, State};
 use axum::http::StatusCode;
-use axum::routing::{get, put};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -32,6 +32,8 @@ pub fn frontend() -> Router<Shared> {
                 .patch(chmod_file)
                 .delete(delete_file),
         )
+        .route("/copies/{id}/history", get(list_history))
+        .route("/copies/{id}/history/{entry}/restore", post(restore))
         .route("/environments/{id}/packs", get(environment_packs))
         .route("/environments/{id}/packs/{pack}", put(choose_copy))
         .route(
@@ -332,17 +334,19 @@ async fn put_file(
         .get("content")
         .and_then(Value::as_str)
         .ok_or_else(|| ApiError::invalid("a file needs content"))?;
+    let copy = id(&c)?;
     let f = packs::put(
         &app.store,
         &app.root,
         &s.principal,
         &s.ip,
-        id(&c)?,
+        copy,
         &key,
         content.as_bytes(),
         mode,
     )
     .await?;
+    app.link_files.mark([copy]);
     Ok(Json(file_json(&f)))
 }
 
@@ -358,16 +362,9 @@ async fn chmod_file(
         .get("mode")
         .and_then(Value::as_u64)
         .ok_or_else(|| ApiError::invalid("a file needs a mode"))? as u32;
-    let f = packs::chmod(
-        &app.store,
-        &app.root,
-        &s.principal,
-        &s.ip,
-        id(&c)?,
-        &key,
-        mode,
-    )
-    .await?;
+    let copy = id(&c)?;
+    let f = packs::chmod(&app.store, &app.root, &s.principal, &s.ip, copy, &key, mode).await?;
+    app.link_files.mark([copy]);
     Ok(Json(file_json(&f)))
 }
 
@@ -378,7 +375,62 @@ async fn delete_file(
     RawQuery(q): RawQuery,
 ) -> Result<StatusCode, ApiError> {
     let key = file_path(q)?;
-    packs::delete_file(&app.store, &app.root, &s.principal, &s.ip, id(&c)?, &key).await?;
+    let copy = id(&c)?;
+    packs::delete_file(&app.store, &app.root, &s.principal, &s.ip, copy, &key).await?;
+    app.link_files.mark([copy]);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The versions of a copy's files other places' changes replaced, with
+/// the place whose change replaced each, by its link's name.
+async fn list_history(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(c): Path<String>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let copy = id(&c)?;
+    let h = crate::linkfiles::history(&app, &s.principal, copy).await?;
+    let here = app.place.as_ref().map(|p| p.id);
+    let links = app
+        .store
+        .begin()
+        .await?
+        .links(Some(s.principal.user_id))
+        .await?;
+    Ok(Json(
+        h.iter()
+            .map(|r| {
+                let key = if r.path.starts_with(packs::HOME) {
+                    r.path.clone()
+                } else {
+                    format!("/{}", r.path)
+                };
+                json!({
+                    "id": r.id,
+                    "path": key,
+                    "size": r.size,
+                    "mode": r.mode,
+                    "changed_at": chrono::DateTime::from_timestamp_millis(r.time),
+                    "replaced_at": r.replaced_at,
+                    "kept_until": r.replaced_at + chrono::Duration::days(7),
+                    "by_here": Some(r.by) == here,
+                    "by": links.iter().find(|l| l.place_id == r.by).map(|l| l.name.clone()),
+                })
+            })
+            .collect(),
+    ))
+}
+
+/// Puts a replaced version back, as a change made here.
+async fn restore(
+    State(app): State<Shared>,
+    s: Signed,
+    Path((c, entry)): Path<(String, String)>,
+) -> Result<StatusCode, ApiError> {
+    let Some(place) = app.place.as_ref().map(|p| p.id) else {
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "not found"));
+    };
+    crate::linkfiles::restore(&app, place, &s.principal, &s.ip, id(&c)?, id(&entry)?).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

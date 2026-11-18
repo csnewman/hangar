@@ -179,6 +179,22 @@ impl Server {
             op if known(op) => ERR_NOT_SUPP,
             _ => ERR_OP_ILLEGAL,
         };
+        // An OPEN tells of a file it makes itself.
+        if st == NFS_OK
+            && matches!(
+                op,
+                OP_SETATTR
+                    | OP_CREATE
+                    | OP_REMOVE
+                    | OP_RENAME
+                    | OP_LINK
+                    | OP_WRITE
+                    | OP_ALLOCATE
+                    | OP_DEALLOCATE
+            )
+        {
+            self.changed(&cs.cur);
+        }
         (st, None)
     }
 

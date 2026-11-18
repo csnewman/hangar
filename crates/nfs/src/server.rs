@@ -26,6 +26,10 @@ pub trait View: Send + Sync {
     fn hidden(&self, set: &str, path: &[u8]) -> bool;
     /// Who a set's callers act as.
     fn squash(&self, set: &str) -> Squash;
+    /// A call has changed something in a set: written to, made, removed,
+    /// renamed or linked a file, or changed one's attributes. Called as
+    /// each such call succeeds, so it is to be quick.
+    fn changed(&self, _set: &str) {}
 }
 
 /// Who a set's callers act as, as an NFS export's options say.
@@ -478,6 +482,16 @@ impl Server {
             return Squash::All;
         }
         self.view.squash(set)
+    }
+
+    /// Tells the view that a call changed something in the set p is in.
+    pub(crate) fn changed(&self, p: &[u8]) {
+        let (set, _) = split(p);
+        if let Ok(set) = std::str::from_utf8(set)
+            && !set.is_empty()
+        {
+            self.view.changed(set);
+        }
     }
 
     /// Why a path may not be reached, or NFS_OK: its set is not the

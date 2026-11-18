@@ -356,6 +356,9 @@ impl Tx {
     /// Writes a copy; false for a person's own of a pack they have one of
     /// already.
     pub async fn insert_copy(&mut self, c: &Copy) -> Result<bool> {
+        if !c.personal {
+            self.signal(Signal::Records);
+        }
         match &mut self.inner {
             Backend::Pg(tx) => Ok(sqlx::query(
                 "INSERT INTO copies (id, pack_id, owner_id, team_id, personal, name, created_at, updated_at)
@@ -389,6 +392,7 @@ impl Tx {
     }
 
     pub async fn rename_copy(&mut self, id: Uuid, name: &str, now: DateTime<Utc>) -> Result<()> {
+        self.signal(Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => {
                 sqlx::query("UPDATE copies SET name = $2, updated_at = $3 WHERE id = $1")
@@ -419,6 +423,7 @@ impl Tx {
             Backend::Json(tx) => json_delete_copy(&mut tx.work, id),
         }
         self.signal(Signal::Shared);
+        self.signal(Signal::Records);
         Ok(())
     }
 
