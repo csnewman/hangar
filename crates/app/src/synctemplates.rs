@@ -21,8 +21,8 @@ const EVERY: Duration = Duration::from_secs(20);
 
 /// What the page asks of the settings window.
 pub enum SyncTemplatesEvent {
-    /// Show a place's Templates page.
-    Open(String),
+    /// Show a template on a place's Templates page, to edit it there.
+    Open { place: String, template: String },
 }
 
 /// One place's templates of the person's own.
@@ -248,25 +248,28 @@ impl SyncTemplatesView {
         for r in &t.repos {
             out = out.child(field("Clones", p).child(form::mono(r.url.to_string())));
         }
-        out = out.child(section("In your places", p));
+        out = out.child(section("Edit", p)).child(note(
+            "It is the same template in each of these places: a change made in one reaches the rest.",
+            p,
+        ));
+        let mut edits = h_flex().gap(px(6.)).flex_wrap();
         for (place, name) in &e.places {
-            let place = place.clone();
-            out = out.child(
-                h_flex()
-                    .gap(px(8.))
-                    .child(div().w(px(160.)).child(name.clone()))
-                    .child(
-                        button(
-                            SharedString::from(format!("sync-template-open-{place}")),
-                            "Change It Here",
-                            p,
-                        )
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(SyncTemplatesEvent::Open(place.clone()))
-                        })),
-                    ),
+            let (place, template) = (place.clone(), e.id.clone());
+            edits = edits.child(
+                button(
+                    SharedString::from(format!("sync-template-open-{place}")),
+                    format!("Edit in {name}"),
+                    p,
+                )
+                .on_click(cx.listener(move |_, _, _, cx| {
+                    cx.emit(SyncTemplatesEvent::Open {
+                        place: place.clone(),
+                        template: template.clone(),
+                    })
+                })),
             );
         }
+        out = out.child(edits);
         let missing: Vec<&str> = self
             .held
             .iter()

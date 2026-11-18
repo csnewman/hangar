@@ -517,8 +517,15 @@ impl SettingsView {
         self._subs.push(cx.subscribe(
             &view,
             |this, _, e: &crate::synctemplates::SyncTemplatesEvent, cx| match e {
-                crate::synctemplates::SyncTemplatesEvent::Open(place) => {
-                    this.show(Page::Templates(place.clone()), cx)
+                crate::synctemplates::SyncTemplatesEvent::Open { place, template } => {
+                    let page = Page::Templates(place.clone());
+                    if let Some(v) = this
+                        .place_view(page.clone(), cx)
+                        .and_then(|v| v.downcast::<crate::templates::TemplatesView>().ok())
+                    {
+                        v.update(cx, |t, cx| t.select(Some(template.clone()), cx));
+                    }
+                    this.show(page, cx)
                 }
             },
         ));

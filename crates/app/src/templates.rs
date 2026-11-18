@@ -401,7 +401,7 @@ impl TemplatesView {
     }
 
     /// Shows a template, or with "" a new one's form.
-    fn select(&mut self, id: Option<String>, cx: &mut Context<Self>) {
+    pub fn select(&mut self, id: Option<String>, cx: &mut Context<Self>) {
         self.selected = id.clone();
         self.detail = None;
         self.draft = None;
