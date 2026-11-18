@@ -548,6 +548,156 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /packs:
+    get:
+      operationId: listPacks
+      summary: >-
+        The packs the user may use: the built-in ones, those attached to
+        everyone, their own, and their teams'. A person's own packs are the
+        same in every place they link.
+      responses:
+        "200":
+          description: The packs, the built-in ones first, then by name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PackList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createPack
+      summary: Make a pack of the user's own, or of a team they are a member or admin of.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PackInput" }
+      responses:
+        "201":
+          description: The pack.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pack" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /packs/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getPack
+      responses:
+        "200":
+          description: The pack.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pack" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updatePack
+      summary: Change a pack's name, description, attach rule and paths.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PackInput" }
+      responses:
+        "200":
+          description: The pack.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pack" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /packs/{id}/copies:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: listCopies
+      summary: The copies of a pack the user may use, their own first (made if they have none yet), then the shared ones.
+      responses:
+        "200":
+          description: The copies.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CopyList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /packs/{id}/merge:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: mergePack
+      summary: >-
+        Merge a pack renamed apart from another of the user's of the same
+        name into that one, here and in every linked place: paths joined,
+        files put together (of a file both have, the one changed later, the
+        other kept in the copy's history), shared copies moved over.
+      responses:
+        "200":
+          description: The pack merged into.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pack" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /packs/{id}/keep-apart:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: keepPackApart
+      summary: Keep a pack renamed apart from another of the same name apart from it, in every linked place.
+      responses:
+        "200":
+          description: The pack.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pack" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /copies/{id}/history:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: listCopyHistory
+      summary: >-
+        The versions of the copy's files that a newer change replaced, made
+        apart from them in a linked place, or by a restore or a merge here;
+        each kept for 7 days, and the latest 5 of a file.
+      responses:
+        "200":
+          description: The versions, the latest replaced first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReplacedFileList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /copies/{id}/history/{entry}/restore:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - { name: entry, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: restoreCopyFile
+      summary: >-
+        Put a replaced version back in the copy, as a change made here, which
+        reaches every environment using the copy and every linked place. The
+        version it replaces is kept in its stead.
+      responses:
+        "204": { description: Restored. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /environments/{id}/packs:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -1562,6 +1712,168 @@ components:
           type: array
           description: The copies of it the user may choose from.
           items: { $ref: "#/components/schemas/PackCopy" }
+
+    PackList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Pack" }
+        next:
+          type: string
+          description: Absent; packs come in one page.
+
+    CopyList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Copy" }
+        next:
+          type: string
+          description: Absent; copies come in one page.
+
+    ReplacedFileList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ReplacedFile" }
+        next:
+          type: string
+          description: Absent; the history comes in one page.
+
+    PackPath:
+      type: object
+      required: [path, sensitive]
+      additionalProperties: false
+      properties:
+        path:
+          type: string
+          description: >-
+            ~/ in the home directory, or absolute. One ending in a slash is a
+            directory and everything under it; one starting with ! is left
+            out of a directory the pack shares.
+        sensitive:
+          type: boolean
+          description: Every file under it is kept from environments given no sensitive files.
+        send_every:
+          type: integer
+          minimum: 0
+          maximum: 3600
+          description: >-
+            How often a file under it that is written in bursts is sent to
+            the owner's linked places: at most once in so many seconds, or
+            every change as written for 0. Without it, as the path holding it
+            says, else at most once a second.
+
+    Pack:
+      type: object
+      required: [id, name, description, builtin, attach, squash, paths, can_change, can_delete, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        owner_id: { type: string }
+        owner: { type: string, description: The owner's username. }
+        team_id: { type: string }
+        team: { type: string, description: The owning team's slug. }
+        builtin:
+          type: boolean
+          description: The server's, which administrators change.
+        attach:
+          type: string
+          description: >-
+            The environments it reaches without a template listing it:
+            listed (none), owner, team or everyone. More may come.
+        squash:
+          type: string
+          description: all_squash, root_squash or no_root_squash. More may come.
+        paths:
+          type: array
+          items: { $ref: "#/components/schemas/PackPath" }
+        default_paths:
+          type: array
+          description: A built-in pack's paths as Hangar ships them.
+          items: { $ref: "#/components/schemas/PackPath" }
+        default_copy_id:
+          type: string
+          description: The copy the user chose to use by default, if they chose one; else their own.
+        same_name:
+          type: string
+          description: >-
+            Another of the owner's packs, which had this one's name in another
+            place when the two were linked: this one may be merged into it or
+            kept apart.
+        can_change: { type: boolean }
+        can_delete: { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PackInput:
+      type: object
+      required: [name, paths]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        description: { type: string }
+        team_id:
+          type: string
+          description: Only when making one; the user's own without.
+        attach: { type: string, enum: [listed, owner, team, everyone] }
+        squash: { type: string, enum: [all_squash, root_squash, no_root_squash] }
+        paths:
+          type: array
+          items: { $ref: "#/components/schemas/PackPath" }
+
+    Copy:
+      type: object
+      required: [id, pack_id, personal, name, can_write, can_delete, created_at]
+      properties:
+        id: { type: string }
+        pack_id: { type: string }
+        owner_id: { type: string }
+        owner: { type: string }
+        team_id: { type: string }
+        team: { type: string }
+        personal:
+          type: boolean
+          description: A person's own copy, one each.
+        name: { type: string }
+        can_write: { type: boolean }
+        can_delete: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    ReplacedFile:
+      type: object
+      required: [id, path, size, mode, replaced_at, kept_until, by_here]
+      properties:
+        id: { type: string }
+        path:
+          type: string
+          description: The file's path, ~/ in the home directory or absolute.
+        size: { type: integer }
+        mode: { type: integer }
+        changed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the version kept was made.
+        replaced_at: { type: string, format: date-time }
+        kept_until: { type: string, format: date-time }
+        by:
+          type: string
+          nullable: true
+          description: The name of the linked place whose change replaced it, when this place is linked with it directly.
+        by_here:
+          type: boolean
+          description: Replaced here, by restoring another version or by merging two packs.
+        merged:
+          type: boolean
+          description: Replaced by merging two packs.
 
     PackCopy:
       type: object

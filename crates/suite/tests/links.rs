@@ -808,3 +808,54 @@ async fn a_pack_kept_apart_is_kept_apart_everywhere() {
     })
     .await;
 }
+
+/// The client API, as the app reads it: the packs, a pack's copies and a
+/// copy's history, and a path's send rule changed.
+#[tokio::test]
+async fn the_client_api_reads_and_changes_packs() {
+    let Some(a) = place().await else {
+        return;
+    };
+    let made = a
+        .admin
+        .create_pack(&body(
+            json!({ "name": "notes", "paths": [{ "path": "~/notes/", "sensitive": false }] }),
+        ))
+        .await
+        .expect("a pack")
+        .into_inner();
+    let packs = a.client.list_packs().await.expect("packs").into_inner();
+    assert!(packs.items.iter().any(|k| k.builtin));
+    let k = packs
+        .items
+        .iter()
+        .find(|k| k.id == made.id)
+        .expect("the pack");
+    let copies = a
+        .client
+        .list_copies(&k.id)
+        .await
+        .expect("copies")
+        .into_inner();
+    let own = copies.items.iter().find(|c| c.personal).expect("one's own");
+    let h = a
+        .client
+        .list_copy_history(&own.id)
+        .await
+        .expect("history")
+        .into_inner();
+    assert!(h.items.is_empty());
+    let changed = a
+        .client
+        .update_pack(
+            &k.id,
+            &body(json!({
+                "name": k.name,
+                "paths": [{ "path": "~/notes/", "sensitive": false, "send_every": 0 }],
+            })),
+        )
+        .await
+        .expect("changing its path")
+        .into_inner();
+    assert_eq!(changed.paths[0].send_every, Some(0));
+}

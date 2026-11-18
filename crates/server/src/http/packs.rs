@@ -46,8 +46,40 @@ pub fn frontend() -> Router<Shared> {
 
 pub fn client() -> Router<Shared> {
     Router::new()
+        .route("/packs", get(client_list_packs).post(create_pack))
+        .route("/packs/{id}", get(get_pack).put(update_pack))
+        .route("/packs/{id}/copies", get(client_list_copies))
+        .route("/packs/{id}/merge", post(merge_pack))
+        .route("/packs/{id}/keep-apart", post(keep_apart))
+        .route("/copies/{id}/history", get(client_list_history))
+        .route("/copies/{id}/history/{entry}/restore", post(restore))
         .route("/environments/{id}/packs", get(client_environment_packs))
         .route("/environments/{id}/packs/{pack}", put(choose_copy))
+}
+
+/// A list as the client API gives one: one page, items and no next.
+fn page(items: Vec<Value>) -> Json<Value> {
+    Json(json!({ "items": items }))
+}
+
+async fn client_list_packs(st: State<Shared>, s: Signed) -> Result<Json<Value>, ApiError> {
+    Ok(page(list_packs(st, s).await?.0))
+}
+
+async fn client_list_copies(
+    st: State<Shared>,
+    s: Signed,
+    k: Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(page(list_copies(st, s, k).await?.0))
+}
+
+async fn client_list_history(
+    st: State<Shared>,
+    s: Signed,
+    c: Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(page(list_history(st, s, c).await?.0))
 }
 
 fn id(s: &str) -> Result<Uuid, ApiError> {
