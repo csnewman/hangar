@@ -24,6 +24,7 @@ pub fn routes() -> Router<Shared> {
         .route("/me/links", get(list_links))
         .route("/me/links/{place}", put(put_link).delete(delete_link))
         .route("/me/link-settings", put(set_link_settings))
+        .route("/me/links/{place}/relay", get(relay_link))
 }
 
 /// The link API's view of a link.
@@ -70,6 +71,21 @@ async fn list_links(State(app): State<Shared>, s: Signed) -> Result<Json<types::
         next: None,
         bandwidth: Some(bandwidth).filter(|b| *b > 0),
     }))
+}
+
+/// A WebSocket the user's app pipes to the other place's link endpoint,
+/// for two linked places neither of which reaches the other.
+async fn relay_link(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(other): Path<String>,
+    ws: axum::extract::ws::WebSocketUpgrade,
+) -> Result<axum::response::Response, ApiError> {
+    let other = uuid::Uuid::parse_str(&other).map_err(|_| ApiError::not_found("link"))?;
+    let user = s.principal.user_id;
+    Ok(ws
+        .max_message_size(16 << 20)
+        .on_upgrade(move |socket| crate::linkconn::relay(app, user, other, socket)))
 }
 
 async fn set_link_settings(

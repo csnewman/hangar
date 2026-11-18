@@ -112,6 +112,8 @@ impl State {
                 updated_at: now,
                 same_name: None,
                 merged: vec![],
+                places: vec![],
+                away: false,
             }],
             pack_paths: crate::packs::profile_defaults()
                 .into_iter()

@@ -244,6 +244,19 @@ fn client_json(v: &View) -> Value {
         o.insert("stats".into(), client_stats(st));
     }
     some_if(o, "web_names", !s.web_names.is_empty(), &s.web_names);
+    if !s.repos.is_empty() {
+        o.insert(
+            "repos".into(),
+            json!(
+                s.repos
+                    .iter()
+                    .map(super::catalog::repo_json)
+                    .collect::<Vec<_>>()
+            ),
+        );
+    }
+    let projects = s.project_folders();
+    some_if(o, "projects", !projects.is_empty(), &projects);
     some_if(
         o,
         "workspace_file",

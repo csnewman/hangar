@@ -290,6 +290,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/packs/{id}/places": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description The linked places one's own pack and its files are for, by place ID; none for every one. A place left out holds its record alone: there it is hidden, and its copies' files are removed and no more sent. */
+        put: operations["setPackPlaces"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/packs/{id}/merge": {
         parameters: {
             query?: never;
@@ -1434,12 +1453,18 @@ export interface components {
             default_copy_id?: string;
             /** @description Another of the owner's packs, which had this one's name in another place when the two were linked: this one was renamed apart from it, and may be merged into it or kept apart. */
             same_name?: string;
+            /** @description The owner's linked places (by place ID) the pack and its files are for; absent, every one. A place left out holds neither. */
+            places?: string[];
             can_change: boolean;
             can_delete: boolean;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        PackPlaces: {
+            /** @description Place IDs; none for every linked place. */
+            places: string[];
         };
         PackInput: {
             name: string;
@@ -2764,6 +2789,36 @@ export interface operations {
             };
             400: components["responses"]["Invalid"];
             401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    setPackPlaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackPlaces"];
+            };
+        };
+        responses: {
+            /** @description The pack. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pack"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };

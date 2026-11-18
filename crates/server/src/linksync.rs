@@ -79,24 +79,27 @@ const PACK: &str = "pack";
 const COPY: &str = "copy";
 const SENDING: &str = "sending";
 const DEFAULT: &str = "default";
+const TEMPLATE: &str = "template";
 
 /// The kinds of record this place holds: SSH keys only with a secret key
 /// to seal them.
 fn kinds(here: &Here) -> Vec<&'static str> {
-    let mut k = vec![THEME, LOGIN_KEY, PACK, COPY, SENDING, DEFAULT];
+    let mut k = vec![THEME, LOGIN_KEY, PACK, COPY, SENDING, DEFAULT, TEMPLATE];
     if here.sealer.is_some() {
         k.push(SSH_KEY);
     }
     k
 }
 
-/// The order records are taken in: a pack before its copies, and a copy
-/// before the default that names it.
+/// The order records are taken in: a pack before its copies, a copy
+/// before the default that names it, and packs before the templates that
+/// list them.
 fn rank(kind: &str) -> u8 {
     match kind {
         PACK => 1,
         COPY => 2,
         DEFAULT => 3,
+        TEMPLATE => 4,
         _ => 0,
     }
 }
@@ -226,6 +229,31 @@ async fn snapshot(
             );
         }
     }
+    // The person's own templates. The profile is named as such: its ID is
+    // each place's own.
+    let profile = packs.iter().find(|p| p.builtin).map(|p| p.id.to_string());
+    for t in tx.templates().await? {
+        if t.owner_id != user || t.team_id.is_some() {
+            continue;
+        }
+        let mut spec = t.spec.clone();
+        if let (Some(profile), Some(list)) = (&profile, spec["packs"].as_array_mut()) {
+            for r in list {
+                if r["pack"].as_str() == Some(profile.as_str()) {
+                    r["pack"] = json!("profile");
+                }
+            }
+        }
+        out.insert(
+            (TEMPLATE.into(), t.id.to_string()),
+            json!({
+                "name": t.name,
+                "description": t.description,
+                "visibility": t.visibility,
+                "spec": spec,
+            }),
+        );
+    }
     for p in packs {
         if !own_pack(&p, user) {
             continue;
@@ -255,6 +283,11 @@ async fn snapshot(
             let mut m: Vec<String> = p.merged.iter().map(Uuid::to_string).collect();
             m.sort();
             body["merged"] = json!(m);
+        }
+        if !p.places.is_empty() {
+            let mut m: Vec<String> = p.places.iter().map(Uuid::to_string).collect();
+            m.sort();
+            body["places"] = json!(m);
         }
         out.insert((PACK.into(), p.id.to_string()), body);
     }
@@ -436,6 +469,7 @@ pub async fn accept(tx: &mut Tx, here: &Here<'_>, user: Uuid, records: &[Record]
         .collect();
     let mut taken = 0;
     let mut removed_copies = vec![];
+    let mut cleared_copies = vec![];
     let mut renamed = vec![];
     // Deletions last: a pack merged into another is deleted once the
     // other has taken its copies.
@@ -457,6 +491,7 @@ pub async fn accept(tx: &mut Tx, here: &Here<'_>, user: Uuid, records: &[Record]
         };
         let mut done = Applied {
             removed_copies: &mut removed_copies,
+            cleared_copies: &mut cleared_copies,
             renamed: &mut renamed,
         };
         if !apply(tx, here, user, &v.kind, &v.id, body, &mut done).await? {
@@ -484,8 +519,8 @@ pub async fn accept(tx: &mut Tx, here: &Here<'_>, user: Uuid, records: &[Record]
     if !renamed.is_empty() {
         let now = snapshot(tx, here, user).await?;
         let known = tx.link_records(user).await?;
-        for id in renamed {
-            let key = (PACK.to_string(), id.to_string());
+        for (kind, id) in renamed {
+            let key = (kind.to_string(), id.to_string());
             if let (Some(body), Some(r)) = (
                 now.get(&key),
                 known
@@ -500,6 +535,15 @@ pub async fn accept(tx: &mut Tx, here: &Here<'_>, user: Uuid, records: &[Record]
             }
         }
     }
+    for c in &cleared_copies {
+        let cleared = here
+            .root
+            .remove_all(&c.to_string())
+            .and_then(|()| crate::linkfiles::forget(here.root, *c));
+        if let Err(e) = cleared {
+            eprintln!("hangar-server: removing the files of a pack for other places: {e}");
+        }
+    }
     if !removed_copies.is_empty()
         && let Err(e) = crate::packs::remove_copies(here.root, &removed_copies)
     {
@@ -512,7 +556,10 @@ pub async fn accept(tx: &mut Tx, here: &Here<'_>, user: Uuid, records: &[Record]
 /// and the packs renamed apart from another of their name.
 struct Applied<'a> {
     removed_copies: &'a mut Vec<Uuid>,
-    renamed: &'a mut Vec<Uuid>,
+    /// Copies whose files go, their rows kept: their pack is for other
+    /// places.
+    cleared_copies: &'a mut Vec<Uuid>,
+    renamed: &'a mut Vec<(&'static str, Uuid)>,
 }
 
 /// Writes one record to its table, or deletes it (body None). False when
@@ -563,6 +610,108 @@ async fn apply(
             }
             tx.set_pack_default(user, pack, Some(copy)).await?;
             Ok(true)
+        }
+        TEMPLATE => {
+            let Ok(tid) = Uuid::parse_str(id) else {
+                return Ok(false);
+            };
+            let all = tx.templates().await?;
+            let existing = all.iter().find(|t| t.id == tid).cloned();
+            if existing
+                .as_ref()
+                .is_some_and(|t| t.owner_id != user || t.team_id.is_some())
+            {
+                return Ok(false);
+            }
+            let Some(b) = body else {
+                if existing.is_some() {
+                    tx.delete_template(tid).await?;
+                }
+                return Ok(true);
+            };
+            let mut spec = b["spec"].clone();
+            if serde_json::from_value::<hangar_api::TemplateSpec>(spec.clone()).is_err() {
+                return Ok(false);
+            }
+            let profile = tx
+                .packs()
+                .await?
+                .into_iter()
+                .find(|p| p.builtin)
+                .map(|p| p.id);
+            if let Some(list) = spec["packs"].as_array_mut() {
+                list.retain(|r| r["pack"].as_str() != Some("profile") || profile.is_some());
+                for r in list {
+                    if r["pack"].as_str() == Some("profile")
+                        && let Some(p) = profile
+                    {
+                        r["pack"] = json!(p.to_string());
+                    }
+                }
+            }
+            let visibility = match b["visibility"].as_str() {
+                Some(v @ ("private" | "shared")) => v.to_string(),
+                _ => "private".into(),
+            };
+            let now = Utc::now();
+            let mut t = crate::store::rows::Template {
+                id: tid,
+                owner_id: user,
+                team_id: None,
+                name: text(b, "name"),
+                description: text(b, "description"),
+                visibility,
+                revision: existing.as_ref().map_or(1, |e| {
+                    if e.spec == spec {
+                        e.revision
+                    } else {
+                        e.revision + 1
+                    }
+                }),
+                spec,
+                created_at: existing.as_ref().map_or(now, |e| e.created_at),
+                updated_at: now,
+            };
+            if t.name.trim().is_empty() {
+                return Ok(false);
+            }
+            // Another of the person's templates may have the name: the one
+            // of the greater ID is renamed, the same in every place.
+            let clash = all
+                .iter()
+                .find(|o| {
+                    o.id != tid && o.owner_id == user && o.team_id.is_none() && o.name == t.name
+                })
+                .cloned();
+            if let Some(other) = clash {
+                let free = (2..)
+                    .map(|n| format!("{} ({n})", t.name))
+                    .find(|n| {
+                        !all.iter()
+                            .any(|o| o.owner_id == user && o.team_id.is_none() && &o.name == n)
+                    })
+                    .unwrap_or_default();
+                if other.id > tid {
+                    let renamed = crate::store::rows::Template {
+                        name: free,
+                        updated_at: now,
+                        ..other
+                    };
+                    if !tx.update_template(&renamed).await? {
+                        return Ok(false);
+                    }
+                    done.renamed.push((TEMPLATE, renamed.id));
+                } else {
+                    t.name = free;
+                    done.renamed.push((TEMPLATE, tid));
+                }
+            }
+            let written = if existing.is_some() {
+                tx.update_template(&t).await?
+            } else {
+                tx.insert_template(&t).await?
+            };
+            Ok(written)
         }
         SENDING => {
             let bandwidth = body.map_or(0, |b| b["bandwidth"].as_i64().unwrap_or(0).max(0));
@@ -693,7 +842,27 @@ async fn apply(
                             .collect()
                     })
                     .unwrap_or_default(),
+                places: b["places"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| Uuid::parse_str(x.as_str()?).ok())
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                away: false,
             };
+            pack.away = !pack.places.is_empty() && !pack.places.contains(&here.place);
+            if pack.away && !existing.as_ref().is_some_and(|p| p.away) {
+                // Left out: what this place holds of its files goes.
+                done.cleared_copies.extend(
+                    tx.copies()
+                        .await?
+                        .iter()
+                        .filter(|c| c.pack_id == pack_id)
+                        .map(|c| c.id),
+                );
+            }
             if pack.name.trim().is_empty() {
                 return Ok(false);
             }
@@ -732,11 +901,11 @@ async fn apply(
                     if !tx.put_pack(&renamed, false).await? {
                         return Ok(false);
                     }
-                    done.renamed.push(other.id);
+                    done.renamed.push((PACK, other.id));
                 } else {
                     pack.name = free;
                     pack.same_name = Some(other.id);
-                    done.renamed.push(pack_id);
+                    done.renamed.push((PACK, pack_id));
                 }
             }
             if !tx.put_pack(&pack, existing.is_none()).await? {

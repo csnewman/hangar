@@ -21,6 +21,7 @@ pub fn frontend() -> Router<Shared> {
         )
         .route("/packs/{id}/copies", get(list_copies).post(create_copy))
         .route("/packs/{id}/default", put(set_default))
+        .route("/packs/{id}/places", put(set_places))
         .route("/packs/{id}/merge", post(merge_pack))
         .route("/packs/{id}/keep-apart", post(keep_apart))
         .route(
@@ -71,6 +72,7 @@ pub fn client() -> Router<Shared> {
             "/environments/{id}/conflicts",
             get(client_list_conflicts).post(resolve_conflict),
         )
+        .route("/packs/{id}/places", put(set_places))
         .route("/packs/{id}/merge", post(merge_pack))
         .route("/packs/{id}/keep-apart", post(keep_apart))
         .route("/copies/{id}/history", get(client_list_history))
@@ -164,6 +166,9 @@ fn pack_json(k: &PackView, default: Option<Uuid>) -> Value {
     if let Some(o) = r.same_name {
         out["same_name"] = json!(o.to_string());
     }
+    if !r.places.is_empty() {
+        out["places"] = json!(r.places.iter().map(Uuid::to_string).collect::<Vec<_>>());
+    }
     out
 }
 
@@ -255,6 +260,35 @@ async fn get_pack(
     let k = packs::pack(&app.store, &s.principal, id(&k)?)
         .await?
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not found"))?;
+    let d = packs::defaults(&app.store, &s.principal).await?;
+    Ok(Json(pack_json(&k, d.get(&k.row.id).copied())))
+}
+
+async fn set_places(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(k): Path<String>,
+    Body(b): Body<Value>,
+) -> Result<Json<Value>, ApiError> {
+    let places = b
+        .get("places")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::invalid("places is a list of place IDs"))?
+        .iter()
+        .map(|x| x.as_str().and_then(|x| Uuid::parse_str(x).ok()))
+        .collect::<Option<Vec<Uuid>>>()
+        .ok_or_else(|| ApiError::invalid("places is a list of place IDs"))?;
+    let here = app.place.as_ref().map(|p| p.id);
+    let k = packs::set_places(
+        &app.store,
+        &app.root,
+        here,
+        &s.principal,
+        &s.ip,
+        id(&k)?,
+        places,
+    )
+    .await?;
     let d = packs::defaults(&app.store, &s.principal).await?;
     Ok(Json(pack_json(&k, d.get(&k.row.id).copied())))
 }

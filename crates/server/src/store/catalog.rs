@@ -73,6 +73,7 @@ impl Tx {
 
     /// Adds a template; false if its owner or team has one by its name.
     pub async fn insert_template(&mut self, t: &Template) -> Result<bool> {
+        self.signal(super::signals::Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => {
                 let r = sqlx::query(&format!(
@@ -109,6 +110,7 @@ impl Tx {
     /// Writes a template's every column; false if its owner or team has
     /// another by its name.
     pub async fn update_template(&mut self, t: &Template) -> Result<bool> {
+        self.signal(super::signals::Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => {
                 let r = sqlx::query(
@@ -152,6 +154,7 @@ impl Tx {
     /// Deletes a template, and its collaborators with it; its environments
     /// keep its name and lose its ID.
     pub async fn delete_template(&mut self, id: Uuid) -> Result<()> {
+        self.signal(super::signals::Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => {
                 sqlx::query("DELETE FROM templates WHERE id = $1")

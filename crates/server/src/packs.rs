@@ -400,8 +400,14 @@ impl World {
             .into_iter()
             .map(|u| (u.id, u.username))
             .collect();
-        let copies = tx.copies().await?;
-        let packs = tx.packs().await?;
+        // A pack held here for other places only is none of this place's.
+        let packs: Vec<Pack> = tx.packs().await?.into_iter().filter(|k| !k.away).collect();
+        let copies: Vec<Copy> = tx
+            .copies()
+            .await?
+            .into_iter()
+            .filter(|c| packs.iter().any(|k| k.id == c.pack_id))
+            .collect();
         for id in copies
             .iter()
             .filter_map(|c| c.owner_id)
@@ -717,6 +723,8 @@ pub async fn create_pack(
         updated_at: now,
         same_name: None,
         merged: vec![],
+        places: vec![],
+        away: false,
     };
     if !tx.put_pack(&k, true).await? {
         return fail::invalid(format!("its owner already has a pack named {}", input.name));
@@ -805,6 +813,59 @@ pub async fn update_pack(
     .await?;
     tx.commit().await?;
     Ok(v)
+}
+
+/// Sets the linked places one's own pack is for, empty for every one. A
+/// place left out holds its record alone: there it is hidden and its
+/// files go, here as anywhere.
+pub async fn set_places(
+    store: &Store,
+    root: &Root,
+    here: Option<Uuid>,
+    p: &Principal,
+    ip: &str,
+    id: Uuid,
+    places: Vec<Uuid>,
+) -> fail::Result<PackView> {
+    let mut tx = store.begin().await?;
+    tx.lock_pack(id).await?;
+    let w = World::load(&mut tx).await?;
+    let Some(cur) = w.pack(p.into(), id) else {
+        return not_found();
+    };
+    if !own(&cur.row, p.user_id) {
+        return fail::forbidden("only one's own packs choose the linked places they are for");
+    }
+    let mut k = cur.row.clone();
+    k.places = places;
+    k.places.sort();
+    k.places.dedup();
+    k.away = !k.places.is_empty() && here.is_some_and(|h| !k.places.contains(&h));
+    k.updated_at = Utc::now();
+    let cleared: Vec<Uuid> = if k.away {
+        w.copies
+            .iter()
+            .filter(|c| c.pack_id == id)
+            .map(|c| c.id)
+            .collect()
+    } else {
+        vec![]
+    };
+    tx.put_pack(&k, false).await?;
+    audit::record(
+        &mut tx,
+        &p.actor(ip),
+        pack_event("file_pack.places", &cur).details(serde_json::json!({
+            "places": k.places.iter().map(Uuid::to_string).collect::<Vec<_>>(),
+        })),
+    )
+    .await?;
+    tx.commit().await?;
+    for c in cleared {
+        root.remove_all(&c.to_string()).map_err(io)?;
+        crate::linkfiles::forget(root, c).map_err(io)?;
+    }
+    Ok(PackView { row: k, ..cur })
 }
 
 /// Deletes a pack and every copy of its files. A built-in pack is not

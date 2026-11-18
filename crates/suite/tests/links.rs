@@ -15,27 +15,32 @@ struct Place {
     server: Server,
     admin: frontendapi::Client,
     client: clientapi::Client,
+    token: String,
 }
 
 async fn place() -> Option<Place> {
     let server = Server::start()?;
     let admin = server.admin().await;
-    let client = server.client(&server.token(&admin, "links").await);
+    let token = server.token(&admin, "links").await;
+    let client = server.client(&token);
     Some(Place {
         server,
         admin,
         client,
+        token,
     })
 }
 
 /// Links a's admin with b's, as the app does: each makes its half.
 async fn link(a: &Place, b: &Place) {
+    link_at(a, b, b.server.loopback_url(), a.server.loopback_url()).await
+}
+
+/// Links them with the addresses each dials the other at.
+async fn link_at(a: &Place, b: &Place, b_at: String, a_at: String) {
     let la = a.client.list_links().await.expect("a's links").into_inner();
     let lb = b.client.list_links().await.expect("b's links").into_inner();
-    for (at, other, url) in [
-        (a, &lb, b.server.loopback_url()),
-        (b, &la, a.server.loopback_url()),
-    ] {
+    for (at, other, url) in [(a, &lb, b_at), (b, &la, a_at)] {
         at.client
             .put_link(
                 &other.place.id,
@@ -858,4 +863,232 @@ async fn the_client_api_reads_and_changes_packs() {
         .expect("changing its path")
         .into_inner();
     assert_eq!(changed.paths[0].send_every, Some(0));
+}
+
+/// A person's own template follows them: made in one place it is in the
+/// other with its ID, the profile it lists being that place's own; changed
+/// there it changes here; deleted, it goes from both.
+#[tokio::test]
+async fn a_persons_template_follows_them() {
+    let (Some(a), Some(b)) = (place().await, place().await) else {
+        return;
+    };
+    link(&a, &b).await;
+    let profile = |p: &Place| {
+        let admin = p.admin.clone();
+        async move {
+            admin
+                .list_packs()
+                .await
+                .expect("packs")
+                .into_inner()
+                .into_iter()
+                .find(|k| k.builtin)
+                .expect("the profile")
+                .id
+        }
+    };
+    let (pa, pb) = (profile(&a).await, profile(&b).await);
+    let mut t = hangar_suite::machine("Mine", "private");
+    t["spec"]["packs"] = json!([{ "pack": pa }]);
+    t["spec"]["access"] = json!({ "no_registry": true });
+    let made = a
+        .admin
+        .create_template(&body(t))
+        .await
+        .expect("a template")
+        .into_inner();
+    let there = eventually("b to hold the template", || async {
+        b.admin
+            .get_template(&made.id)
+            .await
+            .ok()
+            .map(|t| t.into_inner())
+    })
+    .await;
+    assert_eq!(there.name, "Mine");
+    assert_eq!(there.spec.packs[0].pack, pb, "b's own profile");
+    assert_eq!(there.spec.access.and_then(|x| x.no_registry), Some(true));
+
+    let mut changed = hangar_suite::machine("Mine", "private");
+    changed["description"] = json!("changed in b");
+    changed["spec"]["packs"] = json!([{ "pack": pb }]);
+    b.admin
+        .update_template(&made.id, &body(changed))
+        .await
+        .expect("changing it in b");
+    eventually("a to take the change", || async {
+        let t = a.admin.get_template(&made.id).await.ok()?.into_inner();
+        (t.description == "changed in b" && t.spec.packs.first()?.pack == pa).then_some(())
+    })
+    .await;
+
+    a.admin
+        .delete_template(&made.id)
+        .await
+        .expect("deleting it");
+    eventually("b to delete it", || async {
+        b.admin.get_template(&made.id).await.is_err().then_some(())
+    })
+    .await;
+}
+
+/// A pack can be kept from a linked place: left out, the place hides it
+/// and loses its files, and later changes do not reach it; put back, it
+/// has both again.
+#[tokio::test]
+async fn a_pack_is_kept_from_a_place_it_is_not_for() {
+    let (Some(a), Some(b)) = (place().await, place().await) else {
+        return;
+    };
+    let pack = a
+        .admin
+        .create_pack(&body(json!({
+            "name": "secrets",
+            "attach": "owner",
+            "paths": [{ "path": "~/.secrets", "sensitive": true }],
+        })))
+        .await
+        .expect("a pack")
+        .into_inner();
+    link(&a, &b).await;
+    let ca = own_copy(&a, &pack.id).await;
+    put(&a, &ca, "~/.secrets", "one\n").await;
+    let cb = eventually("b to take the pack and its file", || async {
+        let cb = b
+            .admin
+            .list_copies(&pack.id)
+            .await
+            .ok()?
+            .into_inner()
+            .into_iter()
+            .find(|c| c.personal)?
+            .id;
+        (content(&b, &cb, "~/.secrets").await? == "one\n").then_some(cb)
+    })
+    .await;
+    let here = a
+        .client
+        .list_links()
+        .await
+        .expect("a's links")
+        .into_inner()
+        .place
+        .id;
+
+    a.admin
+        .set_pack_places(&pack.id, &body(json!({ "places": [here] })))
+        .await
+        .expect("keeping it from b");
+    eventually("b to hide the pack and drop its files", || async {
+        let gone = b.admin.get_pack(&pack.id).await.is_err();
+        let files = b.server.files_dir().join(&cb);
+        (gone && !files.exists()).then_some(())
+    })
+    .await;
+    put(&a, &ca, "~/.secrets", "two\n").await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert!(
+        !b.server.files_dir().join(&cb).exists(),
+        "a change made while b is left out stays away from it"
+    );
+
+    a.admin
+        .set_pack_places(&pack.id, &body(json!({ "places": [] })))
+        .await
+        .expect("putting b back");
+    eventually("b to hold the pack and the file again", || async {
+        b.admin.get_pack(&pack.id).await.ok()?;
+        (content(&b, &cb, "~/.secrets").await? == "two\n").then_some(())
+    })
+    .await;
+}
+
+/// Two linked places neither of which reaches the other are carried
+/// through a client that reaches both, as the app relays them: one
+/// place's relay socket piped to the other's link endpoint carries a pack
+/// made in one, and its file, to the other.
+#[tokio::test]
+async fn a_relayed_link_carries_what_neither_place_can() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let (Some(a), Some(b)) = (place().await, place().await) else {
+        return;
+    };
+    // Each dials the other at an address that reaches nothing.
+    link_at(
+        &a,
+        &b,
+        "http://127.0.0.1:9".into(),
+        "http://127.0.0.1:9".into(),
+    )
+    .await;
+    let lb = b.client.list_links().await.expect("b's links").into_inner();
+    let mut req = format!(
+        "ws://127.0.0.1:{}/api/v1/me/links/{}/relay",
+        a.server.port(),
+        lb.place.id
+    )
+    .into_client_request()
+    .expect("a request");
+    req.headers_mut().insert(
+        "Authorization",
+        format!("Bearer {}", a.token).parse().expect("a header"),
+    );
+    let (from, _) = tokio_tungstenite::connect_async(req)
+        .await
+        .expect("a's relay socket");
+    let (to, _) = tokio_tungstenite::connect_async(format!(
+        "ws://127.0.0.1:{}/api/link/v1/connect",
+        b.server.port()
+    ))
+    .await
+    .expect("b's link endpoint");
+    let (mut fw, mut fr) = from.split();
+    let (mut tw, mut tr) = to.split();
+    let pipe = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                m = fr.next() => match m {
+                    Some(Ok(m @ (Message::Text(_) | Message::Binary(_)))) => { if tw.send(m).await.is_err() { break } }
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    _ => {}
+                },
+                m = tr.next() => match m {
+                    Some(Ok(m @ (Message::Text(_) | Message::Binary(_)))) => { if fw.send(m).await.is_err() { break } }
+                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                    _ => {}
+                },
+            }
+        }
+    });
+
+    let pack = a
+        .admin
+        .create_pack(&body(json!({
+            "name": "carried",
+            "attach": "owner",
+            "paths": [{ "path": "~/.carried", "sensitive": false }],
+        })))
+        .await
+        .expect("a pack")
+        .into_inner();
+    let ca = own_copy(&a, &pack.id).await;
+    put(&a, &ca, "~/.carried", "over the relay\n").await;
+    eventually("b to take the pack and its file over the relay", || async {
+        b.admin.get_pack(&pack.id).await.ok()?;
+        let cb = b
+            .admin
+            .list_copies(&pack.id)
+            .await
+            .ok()?
+            .into_inner()
+            .into_iter()
+            .find(|c| c.personal)?
+            .id;
+        (content(&b, &cb, "~/.carried").await? == "over the relay\n").then_some(())
+    })
+    .await;
+    pipe.abort();
 }

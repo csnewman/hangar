@@ -52,6 +52,16 @@ info:
     It is refused as the terminal is.
 
 
+    Relay. GET /api/v1/me/links/{place}/relay is a WebSocket for two of
+    the user's linked places neither of which reaches the other: this
+    place speaks the link protocol over it as the side that dialled, and
+    the client pipes every message, text and binary, as it is, to and from
+    the other place's /api/link/v1/connect WebSocket. Each message is
+    signed and sealed between the two places' keys, so the client reads
+    none of them. A place already holding a connection for the link
+    closes it at once with the reason "held".
+
+
     Desktop. GET /api/v1/environments/{id}/desktop is a WebSocket to the
     environment's Linux desktop's VNC server: every binary message is RFB
     bytes, as they are, both ways, and the server reads none of them. The
@@ -669,6 +679,31 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Copy" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /packs/{id}/places:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      operationId: setPackPlaces
+      description: >-
+        The linked places one's own pack and its files are for, by place ID;
+        none for every one. A place left out holds its record alone: there
+        it is hidden, and its copies' files are removed and no more sent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PackPlaces" }
+      responses:
+        "200":
+          description: The pack.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pack" }
         "400": { $ref: "#/components/responses/Invalid" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -2544,10 +2579,26 @@ components:
             Another of the owner's packs, which had this one's name in another
             place when the two were linked: this one may be merged into it or
             kept apart.
+        places:
+          type: array
+          description: >-
+            The owner's linked places (by place ID) the pack and its files
+            are for; absent, every one. A place left out holds neither.
+          items: { type: string }
         can_change: { type: boolean }
         can_delete: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+
+    PackPlaces:
+      type: object
+      required: [places]
+      additionalProperties: false
+      properties:
+        places:
+          type: array
+          description: Place IDs; none for every linked place.
+          items: { type: string }
 
     PackInput:
       type: object
@@ -2718,6 +2769,14 @@ components:
         web_names:
           type: array
           description: The names of its own web servers its template lists.
+          items: { type: string }
+        repos:
+          type: array
+          description: What it cloned when it was made, as its template said.
+          items: { $ref: "#/components/schemas/Repo" }
+        projects:
+          type: array
+          description: The folders its Code tab opens, the first where a new terminal starts.
           items: { type: string }
         gpu:
           type: string

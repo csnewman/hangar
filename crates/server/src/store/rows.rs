@@ -320,6 +320,14 @@ pub struct Pack {
     /// The packs merged into this one.
     #[serde(default)]
     pub merged: Vec<Uuid>,
+    /// The linked places one of a person's own packs is for; none is every
+    /// one.
+    #[serde(default)]
+    pub places: Vec<Uuid>,
+    /// Held here for the places it is for, this not being one: hidden, its
+    /// files kept from here.
+    #[serde(default)]
+    pub away: bool,
 }
 
 /// `pack_paths`.

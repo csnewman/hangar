@@ -554,7 +554,19 @@ async fn dial(place: &Place, person: Uuid, link: &Link) -> Result<Option<Wire>, 
         }
         Err(e) => return Err(e.to_string()),
     };
-    let mut wire = Wire::client(ws);
+    introduce(place, person, link, Wire::client(ws)).await
+}
+
+/// Says who this place is over a connection to a linked place, as the
+/// side that dialled: the connection, once the other has answered as the
+/// key given for it; None when it holds a connection for the link
+/// already; else why not, in words.
+async fn introduce(
+    place: &Place,
+    person: Uuid,
+    link: &Link,
+    mut wire: Wire,
+) -> Result<Option<Wire>, String> {
     let hello = Sealed::make(
         place,
         "connect",
@@ -585,6 +597,44 @@ async fn dial(place: &Place, person: Uuid, link: &Link) -> Result<Option<Wire>, 
         return Err(refused("levels"));
     }
     Ok(Some(wire))
+}
+
+/// Carries a link over a connection the person's app opened to this
+/// place and pipes to the other place's link endpoint, for two places
+/// neither of which reaches the other: this place dials through it as it
+/// would directly, so the app carries what it cannot read. A place
+/// holding a connection for the link already refuses one (held).
+pub async fn relay(app: Arc<App>, user: Uuid, other: Uuid, socket: axum::extract::ws::WebSocket) {
+    let wire = Wire::server(socket);
+    let Some(place) = app.place.clone() else {
+        wire.send(Frame::Close(Some("this place has no link key".into())))
+            .await;
+        return;
+    };
+    let key = (user, other);
+    if app.link_conns.alive(key) {
+        wire.send(Frame::Close(Some("held".into()))).await;
+        return;
+    }
+    let (person, link) = match read_link(&app, key).await {
+        Ok(Some(f)) => f,
+        _ => {
+            wire.send(Frame::Close(Some("not_linked".into()))).await;
+            return;
+        }
+    };
+    match introduce(&place, person, &link, wire).await {
+        Ok(Some(wire)) => match app.link_conns.take(key, place.id) {
+            Some((held, cmds)) => {
+                serve(&app, place.clone(), person, link, wire, held, cmds, true).await;
+            }
+            None => {
+                wire.send(Frame::Close(Some("held".into()))).await;
+            }
+        },
+        Ok(None) => {}
+        Err(why) => eprintln!("hangar-server: relaying a link through the app: {why}"),
+    }
 }
 
 /// Takes a connection another place dialled: once its first message shows
@@ -797,6 +847,10 @@ fn outbox(
     tokio::spawn(async move {
         let mut queue: VecDeque<Job> = VecDeque::new();
         let mut pacer = Pacer::default();
+        // The files sent whole, the version of each and when: a file asked
+        // for twice before it arrived (on taking its version, and on
+        // comparing versions) goes once.
+        let mut whole: HashMap<(String, String), (String, Instant)> = HashMap::new();
         let add = |queue: &mut VecDeque<Job>, j: Job| match queue
             .iter_mut()
             .find(|q| q.copy == j.copy && q.path == j.path)
@@ -818,8 +872,22 @@ fn outbox(
                 continue;
             };
             pacer.read(&app, link.user_id).await;
-            match crate::linkfiles::read(&app, link.user_id, &job).await {
+            match crate::linkfiles::read(&app, link.user_id, &job, link.place_id).await {
+                Ok(Some((piece, _)))
+                    if piece.content
+                        && piece.delta.is_none()
+                        && whole
+                            .get(&(job.copy.clone(), job.path.clone()))
+                            .is_some_and(|(d, at)| {
+                                *d == piece.version.digest && at.elapsed() < SENT_WHOLE
+                            }) => {}
                 Ok(Some((piece, data))) => {
+                    if piece.content && piece.delta.is_none() {
+                        whole.insert(
+                            (job.copy.clone(), job.path.clone()),
+                            (piece.version.digest.clone(), Instant::now()),
+                        );
+                    }
                     if let Err(e) =
                         send_file(&place, person, &link, &tx, &mut pacer, piece, &data).await
                     {
@@ -836,6 +904,9 @@ fn outbox(
     });
     jobs_tx
 }
+
+/// How long a file sent whole is not sent whole again at the same version.
+const SENT_WHOLE: Duration = Duration::from_secs(60);
 
 /// How often a connection's file sender reads the person's bandwidth
 /// limit again.
@@ -997,7 +1068,8 @@ async fn piece(c: &Conn<'_>, frame: &[u8], incoming: &mut Incoming) -> Result<()
 /// to them first; a change found goes to their other connections too.
 async fn offer_files(c: &Conn<'_>) -> Result<(), String> {
     let user = c.link.user_id;
-    let (versions, found) = crate::linkfiles::versions(c.app, c.place.id, user).await?;
+    let (versions, found) =
+        crate::linkfiles::versions(c.app, c.place.id, user, c.link.place_id).await?;
     c.app.link_conns.files(user, Some(c.link.place_id), found);
     let msg = sealed(c.place, "file_versions", c.person, c.link, &versions)?;
     c.wire.send_sealed(&msg).await;

@@ -134,7 +134,7 @@ pub fn spec_json(s: &Spec) -> Value {
     out
 }
 
-fn repo_json(r: &hangar_api::Repo) -> Value {
+pub fn repo_json(r: &hangar_api::Repo) -> Value {
     let mut out = json!({ "url": r.url, "path": r.path });
     if !r.r#ref.is_empty() {
         out["ref"] = json!(r.r#ref);

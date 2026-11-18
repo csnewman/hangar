@@ -55,7 +55,12 @@ impl Rules {
             }
         }
         // The WebSockets, which the specs describe in words: each needs
-        // someone signed in who may reach the environment.
+        // someone signed in who may reach the environment, or for a relay
+        // of one of their links, the person.
+        r.insert(
+            (Method::GET, "/api/v1/me/links/{place}/relay".into()),
+            Access::SignedIn,
+        );
         for prefix in ["/api/frontend", "/api/v1"] {
             for socket in ["terminal", "code", "desktop"] {
                 r.insert(

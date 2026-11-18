@@ -11,7 +11,7 @@ use super::signals::Signal;
 use super::{Backend, Result, Tx};
 
 const PACK_COLUMNS: &str = "id, name, description, owner_id, team_id, builtin, attach, squash, \
-     created_at, updated_at, same_name, merged";
+     created_at, updated_at, same_name, merged, places, away";
 const COPY_COLUMNS: &str = "id, pack_id, owner_id, team_id, personal, name, created_at, updated_at";
 
 fn pack(r: &sqlx::postgres::PgRow) -> Result<Pack> {
@@ -28,6 +28,8 @@ fn pack(r: &sqlx::postgres::PgRow) -> Result<Pack> {
         updated_at: r.try_get("updated_at")?,
         same_name: r.try_get("same_name")?,
         merged: r.try_get("merged")?,
+        places: r.try_get("places")?,
+        away: r.try_get("away")?,
     })
 }
 
@@ -264,11 +266,11 @@ impl Tx {
         let done = match &mut self.inner {
             Backend::Pg(tx) => {
                 let q = if new {
-                    "INSERT INTO packs (id, name, description, owner_id, team_id, builtin, attach, squash, created_at, updated_at, same_name, merged)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)"
+                    "INSERT INTO packs (id, name, description, owner_id, team_id, builtin, attach, squash, created_at, updated_at, same_name, merged, places, away)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)"
                 } else {
                     "UPDATE packs SET name = $2, description = $3, attach = $7, squash = $8, updated_at = $10,
-                        same_name = $11, merged = $12
+                        same_name = $11, merged = $12, places = $13, away = $14
                      WHERE id = $1 AND (owner_id IS NOT DISTINCT FROM $4) AND (team_id IS NOT DISTINCT FROM $5)
                         AND builtin = $6 AND created_at = $9"
                 };
@@ -285,6 +287,8 @@ impl Tx {
                     .bind(k.updated_at)
                     .bind(k.same_name)
                     .bind(&k.merged)
+                    .bind(&k.places)
+                    .bind(k.away)
                     .execute(&mut **tx)
                     .await;
                 match r {

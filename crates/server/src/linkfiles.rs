@@ -670,6 +670,15 @@ pub struct Linked {
     /// This place's copy; none when it is a person's own copy not yet
     /// made.
     pub copy: Option<Uuid>,
+    /// The linked places its pack is for; none is every one.
+    pub places: Vec<Uuid>,
+}
+
+impl Linked {
+    /// Whether its files go to the place given.
+    pub fn for_place(&self, place: Uuid) -> bool {
+        self.places.is_empty() || self.places.contains(&place)
+    }
 }
 
 /// The copies of a person's linked between places.
@@ -678,7 +687,7 @@ pub async fn linked(tx: &mut Tx, user: Uuid) -> StoreResult<Vec<Linked>> {
     let copies = tx.copies().await?;
     let mut out = vec![];
     let mut profile = false;
-    for p in &packs {
+    for p in packs.iter().filter(|p| !p.away) {
         let base = if p.builtin && !profile {
             profile = true;
             "profile".to_string()
@@ -690,6 +699,7 @@ pub async fn linked(tx: &mut Tx, user: Uuid) -> StoreResult<Vec<Linked>> {
         out.push(Linked {
             key: base,
             pack: p.id,
+            places: p.places.clone(),
             copy: copies
                 .iter()
                 .find(|c| c.pack_id == p.id && c.personal && c.owner_id == Some(user))
@@ -700,6 +710,7 @@ pub async fn linked(tx: &mut Tx, user: Uuid) -> StoreResult<Vec<Linked>> {
                 out.push(Linked {
                     key: format!("copy:{}", c.id),
                     pack: p.id,
+                    places: p.places.clone(),
                     copy: Some(c.id),
                 });
             }
@@ -830,13 +841,14 @@ async fn look(app: &App, place: Uuid, copies: &[Uuid]) -> Result<(), String> {
     Ok(())
 }
 
-/// Every version this place has of a person's linked files, each copy
-/// scanned first; changes the scan found go to every connection but the
-/// one asking.
+/// Every version this place has of a person's linked files that are for
+/// the place to, each copy scanned first; changes the scan found go to
+/// every connection but the one asking.
 pub async fn versions(
     app: &App,
     place: Uuid,
     user: Uuid,
+    to: Uuid,
 ) -> Result<(FileVersions, Vec<Job>), String> {
     let (all, paths) = {
         let mut tx = app.store.begin().await.map_err(store_err)?;
@@ -850,6 +862,9 @@ pub async fn versions(
     let mut out = FileVersions::default();
     let mut changed = vec![];
     for l in all {
+        if !l.for_place(to) {
+            continue;
+        }
         let Some(copy) = l.copy else {
             out.copies.insert(l.key, vec![]);
             continue;
@@ -1028,7 +1043,19 @@ pub async fn read(
     app: &App,
     user: Uuid,
     job: &Job,
+    to: Uuid,
 ) -> Result<Option<(FilePiece, Vec<u8>)>, String> {
+    let for_them = {
+        let mut tx = app.store.begin().await.map_err(store_err)?;
+        linked(&mut tx, user)
+            .await
+            .map_err(store_err)?
+            .iter()
+            .any(|l| l.key == job.copy && l.for_place(to))
+    };
+    if !for_them {
+        return Ok(None);
+    }
     let Some(copy) = local(app, user, &job.copy).await.map_err(store_err)? else {
         return Ok(None);
     };
