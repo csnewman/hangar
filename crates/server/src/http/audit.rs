@@ -14,7 +14,9 @@ pub fn frontend() -> Router<Shared> {
 }
 
 pub fn client() -> Router<Shared> {
-    Router::new().route("/environments/{id}/activity", get(activity))
+    Router::new()
+        .route("/environments/{id}/activity", get(activity))
+        .route("/audit", get(client_list))
 }
 
 /// What a query asks of the log.
@@ -137,4 +139,8 @@ async fn activity(
             .collect(),
         next,
     })
+}
+
+async fn client_list(st: State<Shared>, s: Signed, q: RawQuery) -> Result<Json<Value>, ApiError> {
+    Ok(super::items(list(st, s, q).await?))
 }

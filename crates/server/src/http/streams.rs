@@ -44,6 +44,7 @@ pub fn frontend() -> Router<Shared> {
 
 pub fn client() -> Router<Shared> {
     Router::new()
+        .route("/workers/{id}/log", get(worker_log))
         .route("/environments/{id}/terminals", get(client_terminals))
         .route(
             "/environments/{id}/terminals/{session}",

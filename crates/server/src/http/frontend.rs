@@ -34,6 +34,29 @@ pub fn routes() -> Router<Shared> {
         .route("/me/preferences", axum::routing::put(set_preferences))
 }
 
+/// The administrators' users and workers, in the client API as here.
+pub fn admin_client() -> Router<Shared> {
+    Router::new()
+        .route("/users", get(client_users).post(create_user))
+        .route(
+            "/users/{id}",
+            axum::routing::patch(update_user).delete(delete_user),
+        )
+        .route("/workers", get(client_workers))
+        .route("/workers/{id}", get(get_worker).delete(delete_worker))
+        .route("/workers/{id}/revoke", post(revoke_worker))
+        .route("/workers/{id}/images/remove", post(remove_worker_image))
+        .route("/workers/{id}/unknown/remove", post(remove_unknown))
+}
+
+async fn client_users(st: State<Shared>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(super::items(list_users(st).await?))
+}
+
+async fn client_workers(st: State<Shared>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(super::items(list_workers(st).await?))
+}
+
 async fn remove_worker_image(
     State(app): State<Shared>,
     s: Signed,

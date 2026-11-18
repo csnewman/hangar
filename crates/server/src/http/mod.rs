@@ -93,6 +93,12 @@ impl App {
 pub type Shared = Arc<App>;
 
 /// Everything the server serves.
+/// A list as the client API gives one: a single page, its items and no
+/// next.
+pub fn items<T: serde::Serialize>(list: Json<Vec<T>>) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "items": list.0 }))
+}
+
 pub fn router(app: Shared) -> Router {
     Router::new()
         .route("/api/healthz", get(healthz))
@@ -117,6 +123,8 @@ pub fn router(app: Shared) -> Router {
                 .merge(streams::client())
                 .merge(keys::client())
                 .merge(packs::client())
+                .merge(images::client())
+                .merge(frontend::admin_client())
                 .merge(signin::client()),
         )
         .nest("/api/worker/v1", worker::routes())

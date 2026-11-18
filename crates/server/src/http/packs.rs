@@ -47,8 +47,30 @@ pub fn frontend() -> Router<Shared> {
 pub fn client() -> Router<Shared> {
     Router::new()
         .route("/packs", get(client_list_packs).post(create_pack))
-        .route("/packs/{id}", get(get_pack).put(update_pack))
-        .route("/packs/{id}/copies", get(client_list_copies))
+        .route(
+            "/packs/{id}",
+            get(get_pack).put(update_pack).delete(delete_pack),
+        )
+        .route(
+            "/packs/{id}/copies",
+            get(client_list_copies).post(create_copy),
+        )
+        .route("/packs/{id}/default", put(set_default))
+        .route(
+            "/copies/{id}",
+            get(get_copy).patch(rename_copy).delete(delete_copy),
+        )
+        .route(
+            "/copies/{id}/file",
+            get(get_file)
+                .put(put_file)
+                .patch(chmod_file)
+                .delete(delete_file),
+        )
+        .route(
+            "/environments/{id}/conflicts",
+            get(client_list_conflicts).post(resolve_conflict),
+        )
         .route("/packs/{id}/merge", post(merge_pack))
         .route("/packs/{id}/keep-apart", post(keep_apart))
         .route("/copies/{id}/history", get(client_list_history))
@@ -72,6 +94,14 @@ async fn client_list_copies(
     k: Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     Ok(page(list_copies(st, s, k).await?.0))
+}
+
+async fn client_list_conflicts(
+    st: State<Shared>,
+    s: Signed,
+    e: Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(page(list_conflicts(st, s, e).await?.0))
 }
 
 async fn client_list_history(

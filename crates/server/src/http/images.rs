@@ -18,6 +18,18 @@ pub fn frontend() -> Router<Shared> {
         .route("/images/{id}/tags/{tag}", delete(delete_tag))
 }
 
+pub fn client() -> Router<Shared> {
+    Router::new()
+        .route("/images", get(client_list))
+        .route("/images/{id}", get(get_one).patch(update).delete(remove))
+        .route("/images/{id}/collaborators", put(set_collaborators))
+        .route("/images/{id}/tags/{tag}", delete(delete_tag))
+}
+
+async fn client_list(st: State<Shared>, s: Signed) -> Result<Json<Value>, ApiError> {
+    Ok(super::items(list(st, s).await?))
+}
+
 fn id(s: &str) -> Result<Uuid, ApiError> {
     Uuid::parse_str(s).map_err(|_| ApiError::new(StatusCode::NOT_FOUND, "repository not found"))
 }

@@ -417,6 +417,22 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/TemplateList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TemplateInput" }
+      responses:
+        "201":
+          description: Created, owned by the caller.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplateDetail" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /environments/{id}:
     parameters:
@@ -611,6 +627,17 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deletePack
+      description: >-
+        Delete a pack and every copy of its files. A built-in pack is not
+        deleted: attach it to nothing instead.
+      responses:
+        "204":
+          description: Deleted.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /packs/{id}/copies:
     parameters:
@@ -625,6 +652,26 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/CopyList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: createCopy
+      description: >-
+        Make a shared copy of the pack, owned by the team it names, which
+        the user must be a member or admin of, or else by the user.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CopyInput" }
+      responses:
+        "201":
+          description: The copy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Copy" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   /packs/{id}/merge:
@@ -1060,6 +1107,695 @@ paths:
             text/event-stream:
               schema: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /packs/{id}/default:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      operationId: setDefaultCopy
+      description: >-
+        The copy the user uses of the pack, unless an environment or its
+        template says otherwise. Without one, their own.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CopyChoice" }
+      responses:
+        "204":
+          description: Set.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /copies/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getCopy
+      description: A copy, its pack, and its files.
+      responses:
+        "200":
+          description: The copy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CopyFiles" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: renameCopy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CopyName" }
+      responses:
+        "200":
+          description: The copy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Copy" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteCopy
+      description: >-
+        Delete a copy and its files. Environments that used it are given
+        another; a person who deletes their own is given an empty one.
+      responses:
+        "204":
+          description: Deleted.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /copies/{id}/file:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: path
+        in: query
+        required: true
+        description: The file's path, ~/ in the home directory or absolute.
+        schema: { type: string }
+    get:
+      operationId: getCopyFile
+      responses:
+        "200":
+          description: The file.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PackFileContent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: putCopyFile
+      description: >-
+        Write a file under one of the pack's paths. It reaches every running
+        environment using the copy at once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PutPackFile" }
+      responses:
+        "200":
+          description: The file as stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PackFile" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: setCopyFileMode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PackFileMode" }
+      responses:
+        "200":
+          description: The file as stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PackFile" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteCopyFile
+      description: Remove a file, from the copy and every environment using it.
+      responses:
+        "204":
+          description: Removed.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /environments/{id}/conflicts:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: listEnvironmentConflicts
+      description: >-
+        Paths the environment had a file of its own at, differing from its
+        copy's, when they became shared. The copy's is used; the
+        environment's is kept aside until someone resolves it.
+      responses:
+        "200":
+          description: The conflicts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FileConflictList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: resolveEnvironmentConflict
+      description: >-
+        Resolve a conflict: keep the copy's file (shared), or write the
+        environment's over it (environment), which everyone using the copy
+        then has.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResolveConflict" }
+      responses:
+        "204":
+          description: Recorded; the environment's agent does it.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /audit:
+    get:
+      operationId: listAudit
+      description: >-
+        The audit log, newest first. Each subject narrows it to events
+        concerning that thing, as type:id -- environment:<id>,
+        template:<id>, worker:<id>, image:<ref>, user:<id>, owner:<id>,
+        actor:<id>. An administrator sees every event; anyone else sees
+        only events about what they own, about them, or by them.
+      parameters:
+        - name: subject
+          in: query
+          schema:
+            type: array
+            items: { type: string }
+        - name: before
+          in: query
+          description: An event ID; only older events are returned, for the next page.
+          schema: { type: integer, format: int64 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500 }
+      responses:
+        "200":
+          description: Events.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditEventList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /people:
+    get:
+      operationId: listPeople
+      description: >-
+        Every enabled user, as others see them: for choosing collaborators.
+      responses:
+        "200":
+          description: Enabled users, by username.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PersonList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /teams:
+    get:
+      operationId: listTeams
+      description: >-
+        Every team, with the caller's role in each: for choosing a template's
+        owner or collaborators.
+      responses:
+        "200":
+          description: Teams, by name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TeamList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createTeam
+      x-hangar-admin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTeam" }
+      responses:
+        "201":
+          description: Created, with no members.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Team" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /teams/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getTeam
+      responses:
+        "200":
+          description: The team and its members.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Team" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateTeam
+      description: Changes the team's name and description. Its admins may.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TeamInput" }
+      responses:
+        "200":
+          description: The team.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Team" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteTeam
+      x-hangar-admin: true
+      description: Deletes a team that owns nothing.
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /teams/{id}/members/{user}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: user
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      operationId: setTeamMember
+      description: Adds a user to the team, or changes their role. Its admins may.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TeamMembership" }
+      responses:
+        "200":
+          description: The team.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Team" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: removeTeamMember
+      description: Takes a user out of the team. Its admins may.
+      responses:
+        "200":
+          description: The team.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Team" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /images:
+    get:
+      operationId: listImageRepositories
+      description: >-
+        The repositories in Hangar's registry the caller may pull. Absent
+        when the server runs no registry.
+      responses:
+        "200":
+          description: Repositories, by path.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageRepositoryList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /images/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getImageRepository
+      responses:
+        "200":
+          description: The repository and its tags.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageRepository" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateImageRepository
+      description: Changes who may pull the repository, and its description. Its owner may.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImageRepositoryInput" }
+      responses:
+        "200":
+          description: The repository.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageRepository" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteImageRepository
+      description: Deletes the repository with its tags. Its owner may.
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /images/{id}/collaborators:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      operationId: setImageRepositoryCollaborators
+      description: >-
+        Replaces the users, who push, and teams, whose viewers pull and whose
+        members push, besides the owner. Anyone who may push may.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Collaborators" }
+      responses:
+        "200":
+          description: The repository.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageRepository" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /images/{id}/tags/{tag}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: tag
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      operationId: deleteImageTag
+      description: Removes a tag. Anyone who may push may.
+      responses:
+        "200":
+          description: The repository.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageRepository" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /templates/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getTemplate
+      responses:
+        "200":
+          description: The template.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplateDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateTemplate
+      description: >-
+        Replaces the template's content. The owner and collaborators may do
+        this; only the owner may change its visibility. Environments already
+        made from it are unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TemplateInput" }
+      responses:
+        "200":
+          description: The template as changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplateDetail" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteTemplate
+      description: >-
+        Deletes the template. Only its owner may. Environments made from it
+        keep their copy of what it said.
+      responses:
+        "204":
+          description: Deleted.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /templates/{id}/collaborators:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      operationId: setTemplateCollaborators
+      description: >-
+        Replaces the users and teams who, besides the owner, may work on the
+        template. The owner and anyone who may edit it may.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Collaborators" }
+      responses:
+        "200":
+          description: The template with its new collaborators.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TemplateDetail" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /users:
+    get:
+      operationId: listUsers
+      x-hangar-admin: true
+      responses:
+        "200":
+          description: Every user, by username.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createUser
+      x-hangar-admin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateUser" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /users/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    patch:
+      operationId: updateUser
+      x-hangar-admin: true
+      description: >-
+        Changes a user. Setting a password or disabling the user ends their
+        sessions. A change that would leave no enabled administrator is
+        refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateUser" }
+      responses:
+        "200":
+          description: The user as changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteUser
+      x-hangar-admin: true
+      description: Removes a user who owns no environments.
+      responses:
+        "204":
+          description: Removed.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /workers:
+    get:
+      operationId: listWorkers
+      x-hangar-admin: true
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "200":
+          description: Every worker, by name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WorkerList" }
+
+  /workers/{id}/log:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getWorkerLog
+      x-hangar-admin: true
+      description: >-
+        Part of the worker's own log, the latest of which it keeps in
+        memory: what follows offset, or with no offset the end.
+      parameters:
+        - name: offset
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: Part of the log.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogPart" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /workers/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getWorker
+      x-hangar-admin: true
+      responses:
+        "200":
+          description: The worker, with its latest usage and its local images.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Worker" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteWorker
+      x-hangar-admin: true
+      description: >-
+        Forgets a revoked worker that holds no environments, freeing its name
+        to register again.
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "204":
+          description: Removed.
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /workers/{id}/images/remove:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: removeWorkerImage
+      x-hangar-admin: true
+      description: >-
+        Asks the worker to delete an image from its local store. Refused while
+        an environment on the worker uses the image; otherwise the worker
+        deletes it on its next sync, and fetches it again if it is needed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImageCopy" }
+      responses:
+        "202":
+          description: Asked for.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /workers/{id}/unknown/remove:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: removeUnknownEnvironments
+      x-hangar-admin: true
+      description: >-
+        Asks the worker to power off and delete environments it runs that
+        the server has no record of, disks and all. Each must be one the
+        worker reports as unknown.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RemoveUnknownEnvironments" }
+      responses:
+        "202":
+          description: Asked for.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /workers/{id}/revoke:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: revokeWorker
+      x-hangar-admin: true
+      description: >-
+        Stops the worker's credential working. Its environments stay placed
+        on it, because their disks are there.
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "204":
+          description: Revoked.
+        "404": { $ref: "#/components/responses/NotFound" }
 
 components:
   securitySchemes:
@@ -2303,3 +3039,845 @@ components:
           description: How many windows are attached to it.
         cols: { type: integer }
         rows: { type: integer }
+
+    TemplateAccess:
+      type: object
+      additionalProperties: false
+      description: >-
+        What of its owner's the environment is kept from, for code they do
+        not trust. Each is false, giving it everything, when left out.
+      properties:
+        no_self_attached:
+          type: boolean
+          description: >-
+            Only the packs the template lists: none of those attaching
+            themselves to environments, the profile among them.
+        no_sensitive_files:
+          type: boolean
+          description: >-
+            None of the sensitive files -- credentials, such as Claude's
+            sign-in -- of the environment's packs.
+        no_ssh_keys:
+          type: boolean
+          description: No signatures from the owner's SSH keys.
+        no_registry:
+          type: boolean
+          description: No credential for Hangar's registry.
+        no_editor_trust:
+          type: boolean
+          description: >-
+            The Code tab trusts no folder to run its code (its language
+            servers) until the person trusts it.
+
+    AuditActor:
+      type: object
+      required: [kind, name]
+      properties:
+        kind:
+          type: string
+          enum: [person, system, worker, anonymous]
+        id: { type: string }
+        name: { type: string }
+
+    AuditEvent:
+      type: object
+      required: [id, at, actor, action, target, subjects, details]
+      properties:
+        id: { type: integer, format: int64 }
+        at: { type: string, format: date-time }
+        actor: { $ref: "#/components/schemas/AuditActor" }
+        action:
+          type: string
+          description: What happened, as noun.verb.
+        target: { $ref: "#/components/schemas/AuditRef" }
+        subjects:
+          type: array
+          items: { type: string }
+        details:
+          type: object
+          additionalProperties: true
+        ip:
+          type: string
+          description: Where the request came from. Shown to administrators only.
+
+    AuditRef:
+      type: object
+      required: [type, id, name]
+      properties:
+        type: { type: string }
+        id: { type: string }
+        name: { type: string }
+
+    Collaborators:
+      type: object
+      required: [user_ids]
+      additionalProperties: false
+      properties:
+        user_ids:
+          type: array
+          maxItems: 100
+          items: { type: string }
+        team_ids:
+          type: array
+          maxItems: 100
+          items: { type: string }
+
+    CopyChoice:
+      type: object
+      additionalProperties: false
+      properties:
+        copy_id:
+          type: string
+          description: The copy; without one, the rules choose.
+
+    CopyFiles:
+      type: object
+      required: [copy, pack, files]
+      properties:
+        copy: { $ref: "#/components/schemas/Copy" }
+        pack: { $ref: "#/components/schemas/Pack" }
+        files:
+          type: array
+          items: { $ref: "#/components/schemas/PackFile" }
+
+    CopyInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        team_id: { type: string }
+
+    CopyName:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+
+    CreateTeam:
+      type: object
+      required: [slug, name]
+      additionalProperties: false
+      properties:
+        slug: { type: string, minLength: 1, maxLength: 63 }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 1000 }
+
+    CreateUser:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._@-]{0,62}$"
+        display_name: { type: string, maxLength: 200 }
+        password: { type: string, minLength: 8 }
+        admin: { type: boolean }
+
+    Display:
+      type: string
+      description: Whether the environment has a graphical desktop.
+      enum: [none, desktop]
+
+    FileConflict:
+      type: object
+      required: [copy_id, path, found_at]
+      properties:
+        copy_id: { type: string }
+        path: { type: string }
+        found_at: { type: string, format: date-time }
+        resolution:
+          type: string
+          description: How someone resolved it, until the environment's agent has done it.
+          enum: [shared, environment]
+
+    GPU:
+      type: string
+      description: >-
+        virtual renders through a GPU shared with other environments;
+        passthrough gives the environment a whole physical GPU.
+      enum: [none, virtual, passthrough]
+
+    GPUDevice:
+      type: object
+      required: [name, software]
+      properties:
+        name: { type: string }
+        software: { type: boolean }
+
+    GPUInfo:
+      type: object
+      description: What a worker's virtual GPUs render with, as it found when it started.
+      required: [renderer]
+      properties:
+        renderer:
+          type: string
+          description: What its configuration asks for.
+          enum: [auto, hardware, software]
+        device: { type: string }
+        gl: { $ref: "#/components/schemas/GPURenderer" }
+        gl_error: { type: string }
+        vulkan:
+          type: array
+          items: { $ref: "#/components/schemas/GPUDevice" }
+        vulkan_error: { type: string }
+        unavailable:
+          type: string
+          description: Why the worker offers no virtual GPU, when it offers none.
+
+    GPURenderer:
+      type: object
+      required: [vendor, renderer, version, software]
+      properties:
+        vendor: { type: string }
+        renderer: { type: string }
+        version: { type: string }
+        software:
+          type: boolean
+          description: Whether it renders on the host's CPU.
+
+    ImageCopy:
+      type: object
+      description: One copy of an image in a worker's store.
+      required: [ref, digest]
+      additionalProperties: false
+      properties:
+        ref: { type: string, minLength: 1 }
+        digest: { type: string }
+
+    ImageRepository:
+      type: object
+      required: [id, path, name, description, visibility, collaborators, collaborator_teams, tag_count, can_push, can_manage, created_at, updated_at]
+      properties:
+        id: { type: string }
+        path:
+          type: string
+          description: <namespace>/<name>, the namespace being its owner's.
+        name:
+          type: string
+          description: The repository's full name, host included, as image references use it.
+        description: { type: string }
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        owner: { $ref: "#/components/schemas/Person" }
+        team: { $ref: "#/components/schemas/TeamRef" }
+        collaborators:
+          type: array
+          items: { $ref: "#/components/schemas/Person" }
+        collaborator_teams:
+          type: array
+          items: { $ref: "#/components/schemas/TeamRef" }
+        tag_count: { type: integer }
+        tags:
+          type: array
+          description: Given by getImageRepository and the calls that change one, newest first.
+          items: { $ref: "#/components/schemas/ImageTag" }
+        can_push:
+          type: boolean
+          description: Whether the caller may push to it, delete its tags and choose its collaborators.
+        can_manage:
+          type: boolean
+          description: Whether the caller may also change who may pull it, or delete it.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ImageRepositoryInput:
+      type: object
+      required: [visibility]
+      additionalProperties: false
+      properties:
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        description: { type: string, maxLength: 2000 }
+
+    ImageTag:
+      type: object
+      required: [name, digest, media_type, size_bytes, updated_at]
+      properties:
+        name: { type: string }
+        digest: { type: string }
+        media_type: { type: string }
+        size_bytes:
+          type: integer
+          format: int64
+          description: The image's config and layers, compressed; for an index, its largest image.
+        updated_at: { type: string, format: date-time }
+
+    LocalImage:
+      type: object
+      required: [ref, digest, size_bytes, state, environments, current]
+      properties:
+        ref: { type: string }
+        digest:
+          type: string
+          description: >-
+            What the reference named when the copy was taken: the manifest's
+            digest for a pulled image, "build:" and the build's ID for a copy
+            of a local build.
+        current:
+          type: boolean
+          description: >-
+            Whether the copy is what the reference names, as the worker last
+            looked. New environments are made from the current copy; older
+            ones stay for the environments made from them.
+        size_bytes: { type: integer, format: int64 }
+        state:
+          type: string
+          enum: [ready, fetching]
+        environments:
+          type: array
+          description: IDs of the environments on the worker using it.
+          items: { type: string }
+
+    Monitor:
+      type: string
+      enum: [cloud-hypervisor, krun, proxmox]
+      description: >-
+        What runs a worker's environments: cloud-hypervisor on Linux; krun,
+        libkrun on macOS or Linux; proxmox, each a Proxmox VE VM. Absent
+        until the worker says.
+
+    PackAttach:
+      type: string
+      description: >-
+        The environments a pack reaches without a template listing it: none
+        (listed), its owner's, its team's members', or everyone's (an
+        administrator's to set).
+      enum: [listed, owner, team, everyone]
+
+    PackFile:
+      type: object
+      required: [path, size, mode, sensitive, shared, updated_at]
+      properties:
+        path: { type: string }
+        size: { type: integer }
+        mode: { type: integer }
+        sensitive:
+          type: boolean
+          description: Under a sensitive path of the pack.
+        shared:
+          type: boolean
+          description: >-
+            Under a path the pack shares. A copy keeps a file the pack stopped
+            sharing until someone deletes it.
+        updated_at: { type: string, format: date-time }
+
+    PackFileContent:
+      type: object
+      required: [path, content, mode, sensitive, shared, updated_at]
+      properties:
+        path: { type: string }
+        content: { type: string }
+        mode: { type: integer }
+        sensitive: { type: boolean }
+        shared: { type: boolean }
+        updated_at: { type: string, format: date-time }
+
+    PackFileMode:
+      type: object
+      required: [mode]
+      additionalProperties: false
+      properties:
+        mode:
+          type: integer
+          minimum: 1
+          maximum: 511
+          description: Its permissions, as chmod takes them (0o600 is 384).
+
+    PackRef:
+      type: object
+      required: [pack]
+      additionalProperties: false
+      properties:
+        pack: { type: string }
+        copy:
+          type: string
+          description: >-
+            The copy every environment made from the template uses; without
+            one, each owner's own.
+
+    PackSquash:
+      type: string
+      description: >-
+        Who environments' callers act as on the pack's files, as an NFS
+        export's options say: every one as the environments' user, root
+        among them, so one owner has everything (all_squash); root as
+        nobody (root_squash); or each as themselves (no_root_squash).
+      enum: [all_squash, root_squash, no_root_squash]
+
+    Person:
+      type: object
+      required: [id, username, display_name]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        display_name: { type: string }
+
+    PutPackFile:
+      type: object
+      required: [content]
+      additionalProperties: false
+      properties:
+        content: { type: string }
+        mode:
+          type: integer
+          minimum: 1
+          maximum: 511
+          description: >-
+            Its permissions; without, the file's own, or 0600 for a sensitive
+            one and 0644 for another.
+
+    RemoveUnknownEnvironments:
+      type: object
+      required: [environments]
+      properties:
+        environments:
+          type: array
+          minItems: 1
+          items: { type: string }
+
+    TemplateRepo:
+      type: object
+      required: [url, path]
+      additionalProperties: false
+      properties:
+        url: { type: string, minLength: 1 }
+        ref:
+          type: string
+          description: >-
+            Branch, tag or commit to check out. Empty for the default branch.
+            In a template it may use variables, as branch does.
+        path:
+          type: string
+          description: >-
+            Where in the environment to clone it. Absolute. In a template it
+            may use variables, as branch does.
+        branch:
+          type: string
+          description: >-
+            A new branch to create after cloning. In a template it may use
+            variables, filled in as each environment is made: {name},
+            {owner}, {short_id}, {template}, and each named group of the name
+            pattern, such as {ticket} from (?P<ticket>[A-Z]+-[0-9]+); a
+            group the name leaves out is empty. {variable:lower} and
+            {variable:upper} change the case.
+
+    ResolveConflict:
+      type: object
+      required: [copy_id, path, resolution]
+      additionalProperties: false
+      properties:
+        copy_id: { type: string }
+        path: { type: string }
+        resolution:
+          type: string
+          enum: [shared, environment]
+
+    Spec:
+      type: object
+      required: [image, cpus, memory_mib, display, gpu, repos, placement]
+      additionalProperties: false
+      properties:
+        image: { type: string, minLength: 1 }
+        cpus: { type: integer, minimum: 1, maximum: 64 }
+        memory_mib: { type: integer, minimum: 512, maximum: 262144 }
+        display: { $ref: "#/components/schemas/Display" }
+        gpu: { $ref: "#/components/schemas/GPU" }
+        repos:
+          type: array
+          maxItems: 16
+          items: { $ref: "#/components/schemas/TemplateRepo" }
+        projects:
+          type: array
+          maxItems: 16
+          description: >-
+            The folders the Code tab opens side by side, its workspace to
+            begin with. The first is where the Code tab and a new terminal
+            start. A template that names none
+            has its repositories'. In a template each may use variables, as
+            a repository's branch does.
+          items: { type: string }
+        packs:
+          type: array
+          maxItems: 16
+          description: >-
+            The packs the environment has, in order, before those attaching
+            themselves to it: a path two of them name is the first's. A pack
+            the owner may not use is left out.
+          items: { $ref: "#/components/schemas/PackRef" }
+        trusted_folders:
+          type: array
+          description: >-
+            Folders the Code tab trusts to run their code (its language
+            servers) without asking, beyond the repositories and the projects,
+            which it trusts anyway. Ignored with no_editor_trust, where it
+            trusts nothing.
+          items: { type: string }
+        access: { $ref: "#/components/schemas/TemplateAccess" }
+        dax:
+          type: boolean
+          description: >-
+            Map the image's files from the host's page cache (DAX) rather than
+            read them into the environment's own memory. Their memory is then
+            shared with other environments on the image, but programs that run
+            from large files, such as a browser, are many times slower on a
+            worker under nested virtualisation. Only a worker that attaches
+            images as persistent memory (image_device pmem) can map them;
+            others read them in regardless.
+        swap_mib:
+          type: integer
+          minimum: 0
+          maximum: 262144
+          description: >-
+            The environment's swap, in MiB: what its programs leave untouched
+            for a while is swapped out, compressed in its own memory and then
+            to a disk, handing that memory back to its worker. Absent is its
+            worker's default (as much as its memory, unless the worker is set
+            otherwise); 0 is none.
+        memory_reclaim:
+          type: boolean
+          description: >-
+            Experimental: the environment hands back the memory its programs
+            leave idle, swapping it out, and the cache nothing has touched for
+            a while, so its worker gets that memory back. A program left idle
+            is then slow to answer when next used, while its memory is brought
+            back in. Off unless asked for; what it frees goes back either way.
+        web_names:
+          type: array
+          maxItems: 16
+          description: >-
+            Names of the environment's own web servers, such as dashboard,
+            which its page links to: each is reached on
+            <name>-env<short> after Hangar's host.
+          items: { type: string }
+        placement:
+          type: object
+          description: >-
+            Worker labels the environment requires: it runs only on a worker
+            with every one of these labels, with these values.
+          additionalProperties: { type: string }
+
+    Team:
+      type: object
+      required: [id, slug, name, description, member_count, templates, can_manage, created_at]
+      properties:
+        id: { type: string }
+        slug:
+          type: string
+          description: The team's name in paths. It does not change.
+        name: { type: string }
+        description: { type: string }
+        member_count: { type: integer }
+        members:
+          type: array
+          description: Given by getTeam and the calls that change a team.
+          items: { $ref: "#/components/schemas/TeamMember" }
+        templates:
+          type: integer
+          description: How many templates the team owns.
+        role: { $ref: "#/components/schemas/TeamRole" }
+        can_manage:
+          type: boolean
+          description: Whether the caller may change the team and its members.
+        created_at: { type: string, format: date-time }
+
+    TeamInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 1000 }
+
+    TeamMember:
+      type: object
+      required: [person, role]
+      properties:
+        person: { $ref: "#/components/schemas/Person" }
+        role: { $ref: "#/components/schemas/TeamRole" }
+
+    TeamMembership:
+      type: object
+      required: [role]
+      additionalProperties: false
+      properties:
+        role: { $ref: "#/components/schemas/TeamRole" }
+
+    TeamRef:
+      type: object
+      required: [id, slug, name]
+      properties:
+        id: { type: string }
+        slug: { type: string }
+        name: { type: string }
+
+    TeamRole:
+      type: string
+      description: >-
+        viewer: sees and uses what the team owns. member: also changes it.
+        admin: also runs the team and deletes what it owns.
+      enum: [viewer, member, admin]
+
+    TemplateDetail:
+      type: object
+      description: >-
+        owner is the user who made the template or took it on; team, when
+        present, is the team that owns it instead.
+      required: [id, name, description, visibility, owner, collaborators, collaborator_teams, spec, environments, can_edit, can_manage, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        owner: { $ref: "#/components/schemas/Person" }
+        team: { $ref: "#/components/schemas/TeamRef" }
+        collaborators:
+          type: array
+          items: { $ref: "#/components/schemas/Person" }
+        collaborator_teams:
+          type: array
+          description: >-
+            Teams whose viewers use the template and whose members and admins
+            edit it.
+          items: { $ref: "#/components/schemas/TeamRef" }
+        spec: { $ref: "#/components/schemas/Spec" }
+        name_pattern:
+          type: string
+          description: >-
+            A regular expression an environment's whole name must match, such
+            as a ticket ID.
+        name_hint:
+          type: string
+          description: What name the pattern wants, in words.
+        environments:
+          type: integer
+          description: How many environments made from it exist.
+        can_edit:
+          type: boolean
+          description: Whether the caller may change the recipe and its collaborators.
+        can_manage:
+          type: boolean
+          description: Whether the caller may also change its visibility, or delete it.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    TemplateInput:
+      type: object
+      required: [name, visibility, spec]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 2000 }
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        spec: { $ref: "#/components/schemas/Spec" }
+        name_pattern: { type: string, maxLength: 500 }
+        name_hint: { type: string, maxLength: 200 }
+        team_id:
+          type: string
+          description: >-
+            The team to own the template, one the caller is a member or admin
+            of; empty for the caller. Absent leaves an existing template's
+            owner as it is.
+
+    UpdateUser:
+      type: object
+      additionalProperties: false
+      description: Only the fields present are changed.
+      properties:
+        display_name: { type: string, maxLength: 200 }
+        admin: { type: boolean }
+        disabled: { type: boolean }
+        password: { type: string, minLength: 8 }
+
+    User:
+      type: object
+      required: [id, username, display_name, admin, disabled, has_password, environments, created_at]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        display_name: { type: string }
+        admin: { type: boolean }
+        disabled:
+          type: boolean
+          description: A disabled user cannot sign in. Their environments are kept.
+        has_password: { type: boolean }
+        environments:
+          type: integer
+          description: How many environments the user owns.
+        created_at: { type: string, format: date-time }
+
+    Visibility:
+      type: string
+      description: >-
+        private: the owner and collaborators see it. shared: everyone does.
+      enum: [private, shared]
+
+    Worker:
+      type: object
+      required: [id, name, labels, capacity, allocated, online, revoked, unknown, created_at, images, features, pending_removals]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        labels:
+          type: object
+          additionalProperties: { type: string }
+        capacity: { $ref: "#/components/schemas/Resources" }
+        allocated:
+          $ref: "#/components/schemas/Resources"
+        online: { type: boolean }
+        revoked: { type: boolean }
+        unknown:
+          type: array
+          description: >-
+            Environments the worker is running that the server has no record
+            of. Reported, never stopped automatically.
+          items: { type: string }
+        last_seen_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        stats:
+          $ref: "#/components/schemas/WorkerStats"
+        images:
+          type: array
+          items: { $ref: "#/components/schemas/LocalImage" }
+        gpu: { $ref: "#/components/schemas/GPUInfo" }
+        monitor:
+          $ref: "#/components/schemas/Monitor"
+        version:
+          type: string
+          description: The worker's build, as it last reported it.
+        features:
+          type: array
+          description: >-
+            What it can do beyond what its worker API level promises, as it
+            last reported: suspend, gpu, and in time more. An environment
+            is placed only on a worker with every feature it needs.
+          items: { type: string }
+        pending_removals:
+          type: array
+          description: Copies of images the worker has been asked to delete and still holds.
+          items:
+            $ref: "#/components/schemas/ImageCopy"
+
+    WorkerStats:
+      type: object
+      description: The worker's machine as a whole, as last measured.
+      required: [cpu_percent, support_cpus, gpu_cpus, load1, memory_used_mib, memory_total_mib, guest_memory_mib, monitor_memory_mib, support_memory_mib, swap_used_mib, swap_total_mib, guest_swap_mib, guest_swap_pool_mib, guest_swap_disk_bytes, disk_used_bytes, disk_total_bytes]
+      properties:
+        cpu_percent: { type: number }
+        support_cpus:
+          type: number
+          description: >-
+            Host cores its environments' support processes use -- their GPU
+            backends, file systems and networks -- beside their vCPUs.
+        gpu_cpus:
+          type: number
+          description: The GPU backends' part of support_cpus, where software rendering runs.
+        load1: { type: number }
+        memory_used_mib: { type: integer }
+        memory_total_mib: { type: integer }
+        guest_memory_mib:
+          type: integer
+          description: The memory its environments' RAM takes up (host_memory_mib), summed.
+        monitor_memory_mib:
+          type: integer
+          description: What its environments' monitors hold beside their RAM (monitor_memory_mib), summed.
+        support_memory_mib:
+          type: integer
+          description: What the processes serving its environments hold (support_memory_mib), summed.
+        swap_used_mib:
+          type: integer
+          description: The machine's own swap in use.
+        swap_total_mib:
+          type: integer
+          description: The machine's own swap.
+        guest_swap_mib:
+          type: integer
+          description: What its environments have swapped out (swap_used_mib), summed.
+        guest_swap_pool_mib:
+          type: integer
+          description: >-
+            The memory its environments' compressed swap takes (swap_pool_mib),
+            summed.
+        guest_swap_disk_bytes:
+          type: integer
+          format: int64
+          description: The disk its environments' swap disks take (swap_disk_bytes), summed.
+        disk_used_bytes: { type: integer, format: int64 }
+        disk_total_bytes: { type: integer, format: int64 }
+
+    AuditEventList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AuditEvent" }
+        next:
+          type: string
+          description: Absent; the list comes in one page.
+
+    FileConflictList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/FileConflict" }
+        next:
+          type: string
+          description: Absent; the list comes in one page.
+
+    ImageRepositoryList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ImageRepository" }
+        next:
+          type: string
+          description: Absent; the list comes in one page.
+
+    PersonList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Person" }
+        next:
+          type: string
+          description: Absent; the list comes in one page.
+
+    TeamList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Team" }
+        next:
+          type: string
+          description: Absent; the list comes in one page.
+
+    UserList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/User" }
+        next:
+          type: string
+          description: Absent; the list comes in one page.
+
+    WorkerList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Worker" }
+        next:
+          type: string
+          description: Absent; the list comes in one page.

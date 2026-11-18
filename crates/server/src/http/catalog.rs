@@ -36,7 +36,33 @@ pub fn frontend() -> Router<Shared> {
 }
 
 pub fn client() -> Router<Shared> {
-    Router::new().route("/templates", get(client_templates))
+    Router::new()
+        .route("/templates", get(client_templates).post(create_template))
+        .route(
+            "/templates/{id}",
+            get(get_template)
+                .put(update_template)
+                .delete(delete_template),
+        )
+        .route("/templates/{id}/collaborators", put(set_collaborators))
+        .route("/people", get(client_people))
+        .route("/teams", get(client_teams).post(create_team))
+        .route(
+            "/teams/{id}",
+            get(get_team).patch(update_team).delete(delete_team),
+        )
+        .route(
+            "/teams/{id}/members/{user}",
+            put(set_member).delete(remove_member),
+        )
+}
+
+async fn client_people(st: State<Shared>) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(super::items(people(st).await?))
+}
+
+async fn client_teams(st: State<Shared>, s: Signed) -> Result<Json<serde_json::Value>, ApiError> {
+    Ok(super::items(list_teams(st, s).await?))
 }
 
 fn id(s: &str, what: &str) -> Result<Uuid, ApiError> {
