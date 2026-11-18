@@ -78,22 +78,25 @@ const SSH_KEY: &str = "ssh_key";
 const PACK: &str = "pack";
 const COPY: &str = "copy";
 const SENDING: &str = "sending";
+const DEFAULT: &str = "default";
 
 /// The kinds of record this place holds: SSH keys only with a secret key
 /// to seal them.
 fn kinds(here: &Here) -> Vec<&'static str> {
-    let mut k = vec![THEME, LOGIN_KEY, PACK, COPY, SENDING];
+    let mut k = vec![THEME, LOGIN_KEY, PACK, COPY, SENDING, DEFAULT];
     if here.sealer.is_some() {
         k.push(SSH_KEY);
     }
     k
 }
 
-/// The order records are taken in: a pack before its copies.
+/// The order records are taken in: a pack before its copies, and a copy
+/// before the default that names it.
 fn rank(kind: &str) -> u8 {
     match kind {
         PACK => 1,
         COPY => 2,
+        DEFAULT => 3,
         _ => 0,
     }
 }
@@ -197,7 +200,22 @@ async fn snapshot(
     }
     let paths = tx.pack_paths().await?;
     let packs = tx.packs().await?;
-    for c in tx.copies().await? {
+    let copies = tx.copies().await?;
+    // The copy the person uses of a pack by default, when it is one that
+    // travels: a shared copy of theirs, of the profile or a pack of
+    // theirs. Their own copy is the default without one.
+    for d in tx.pack_defaults(user).await? {
+        let Some(c) = copies.iter().find(|c| c.id == d.copy_id) else {
+            continue;
+        };
+        if c.personal || c.owner_id != Some(user) || c.team_id.is_some() {
+            continue;
+        }
+        if let Some(pack) = copy_pack(&packs, c, user) {
+            out.insert((DEFAULT.into(), pack), json!({ "copy": c.id.to_string() }));
+        }
+    }
+    for c in copies {
         if c.personal || c.owner_id != Some(user) || c.team_id.is_some() {
             continue;
         }
@@ -482,6 +500,34 @@ async fn apply(
             tx.set_theme(user, &theme).await?;
             Ok(true)
         }
+        DEFAULT => {
+            let packs = tx.packs().await?;
+            let pack = match id {
+                "profile" => packs.iter().find(|p| p.builtin).map(|p| p.id),
+                p => Uuid::parse_str(p)
+                    .ok()
+                    .filter(|id| packs.iter().any(|k| k.id == *id && own_pack(k, user))),
+            };
+            let Some(pack) = pack else {
+                return Ok(false);
+            };
+            let Some(b) = body else {
+                tx.set_pack_default(user, pack, None).await?;
+                return Ok(true);
+            };
+            let Some(copy) = b["copy"].as_str().and_then(|c| Uuid::parse_str(c).ok()) else {
+                return Ok(false);
+            };
+            // Taken once the copy is here: its record comes first.
+            let here = tx.copies().await?.into_iter().any(|c| {
+                c.id == copy && c.pack_id == pack && c.owner_id == Some(user) && !c.personal
+            });
+            if !here {
+                return Ok(false);
+            }
+            tx.set_pack_default(user, pack, Some(copy)).await?;
+            Ok(true)
+        }
         SENDING => {
             let bandwidth = body.map_or(0, |b| b["bandwidth"].as_i64().unwrap_or(0).max(0));
             tx.set_link_bandwidth(user, bandwidth).await?;
@@ -600,7 +646,9 @@ async fn apply(
                 squash,
                 created_at: existing.as_ref().map_or(now, |p| p.created_at),
                 updated_at: now,
-                same_name: b["same_name"].as_str().and_then(|s| Uuid::parse_str(s).ok()),
+                same_name: b["same_name"]
+                    .as_str()
+                    .and_then(|s| Uuid::parse_str(s).ok()),
                 merged: b["merged"]
                     .as_array()
                     .map(|a| {
@@ -667,7 +715,9 @@ async fn apply(
                                 sensitive: p[1].as_bool().unwrap_or(false),
                                 send_every: p[2]
                                     .as_i64()
-                                    .filter(|n| (0..=i64::from(crate::packs::MAX_SEND_EVERY)).contains(n))
+                                    .filter(|n| {
+                                        (0..=i64::from(crate::packs::MAX_SEND_EVERY)).contains(n)
+                                    })
                                     .map(|n| n as i32),
                             })
                         })

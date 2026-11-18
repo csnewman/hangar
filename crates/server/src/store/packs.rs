@@ -445,6 +445,7 @@ impl Tx {
         pack: Uuid,
         copy: Option<Uuid>,
     ) -> Result<()> {
+        self.signal(Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => {
                 match copy {

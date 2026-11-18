@@ -648,3 +648,51 @@ async fn a_large_file_changed_a_little_goes_as_what_changed() {
         "edited: {edited:?}"
     );
 }
+
+/// The copy a person uses of a pack by default follows them: chosen in
+/// one place, it is chosen in the other; put back to their own there, it
+/// is put back here.
+#[tokio::test]
+async fn a_default_copy_follows_the_person() {
+    let (Some(a), Some(b)) = (place().await, place().await) else {
+        return;
+    };
+    link(&a, &b).await;
+    let profile = |p: &Place| {
+        let admin = p.admin.clone();
+        async move {
+            admin
+                .list_packs()
+                .await
+                .expect("packs")
+                .into_inner()
+                .into_iter()
+                .find(|k| k.builtin)
+                .expect("the profile")
+        }
+    };
+    let pa = profile(&a).await;
+    let work = a
+        .admin
+        .create_copy(&pa.id, &body(json!({ "name": "work" })))
+        .await
+        .expect("a shared copy")
+        .into_inner();
+    a.admin
+        .set_default_copy(&pa.id, &body(json!({ "copy_id": work.id })))
+        .await
+        .expect("choosing it");
+    eventually("b to use the shared copy by default", || async {
+        (profile(&b).await.default_copy_id.as_deref() == Some(work.id.as_str())).then_some(())
+    })
+    .await;
+    let pb = profile(&b).await;
+    b.admin
+        .set_default_copy(&pb.id, &body(json!({})))
+        .await
+        .expect("putting it back");
+    eventually("a to use its own again", || async {
+        profile(&a).await.default_copy_id.is_none().then_some(())
+    })
+    .await;
+}
