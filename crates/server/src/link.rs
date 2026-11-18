@@ -13,6 +13,7 @@
 //! recipient's key (`Sealed`), so neither a proxy that ends TLS nor one
 //! in between can read or change them.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -381,6 +382,10 @@ fn words(e: &reqwest::Error) -> String {
 }
 
 fn client() -> Result<reqwest::Client, String> {
+    client_within(WITHIN)
+}
+
+fn client_within(within: Duration) -> Result<reqwest::Client, String> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let tls = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
@@ -391,30 +396,35 @@ fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .tls_backend_preconfigured(tls)
         .connect_timeout(Duration::from_secs(10))
-        .timeout(WITHIN)
+        .timeout(within)
         .user_agent(concat!("hangar-server/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| e.to_string())
 }
 
-/// How often this place looks for changes to its linked people's records,
-/// to send them on.
-const SCAN: Duration = Duration::from_secs(5);
-
-/// Keeps every link: looks for changes to linked people's records every
-/// few seconds, and says hello to each linked place and exchanges records
-/// with it every minute, whenever a change is found, and whenever woken.
+/// Keeps every link. Whenever a record linked places share is written
+/// here (the store's Records signal), this place looks for what changed
+/// in its linked people's records and, when something did, says hello to
+/// each linked place and exchanges records with it at once. It does both
+/// every minute too, whenever a link is made, and whenever woken by a
+/// place that sent it something.
 pub async fn run(app: Arc<crate::http::App>, place: Arc<Place>) {
     let mut due = tokio::time::Instant::now();
     let mut woke = true;
+    let mut waiters: HashMap<(Uuid, Uuid), tokio::task::JoinHandle<()>> = HashMap::new();
     loop {
         let changed = scan_all(&app, &place).await;
-        if changed || woke || tokio::time::Instant::now() >= due {
+        for user in &changed {
+            app.link_changes.bump(*user);
+        }
+        if !changed.is_empty() || woke || tokio::time::Instant::now() >= due {
             reach_all(&app, &place).await;
+            keep_waiters(&app, &place, &mut waiters).await;
             due = tokio::time::Instant::now() + EVERY;
         }
         woke = tokio::select! {
-            _ = tokio::time::sleep(SCAN) => false,
+            _ = tokio::time::sleep_until(due) => false,
+            _ = app.store.signals.records.notified() => false,
             _ = app.links_wake.notified() => true,
         };
     }
@@ -428,17 +438,19 @@ fn here<'a>(app: &'a crate::http::App, place: &Place) -> crate::linksync::Here<'
     }
 }
 
-/// Notices changes to every linked person's records; gives whether there
-/// were any.
-async fn scan_all(app: &crate::http::App, place: &Place) -> bool {
+/// Notices changes to every linked person's records; gives the people
+/// whose records changed.
+async fn scan_all(app: &crate::http::App, place: &Place) -> Vec<Uuid> {
     let here = here(app, place);
     let scanned = async {
         let users = app.store.begin().await?.linked_users().await?;
-        let mut changed = false;
+        let mut changed = vec![];
         for user in users {
             let mut tx = app.store.begin().await?;
             tx.lock_link_records(user).await?;
-            changed |= crate::linksync::scan(&mut tx, &here, user).await?;
+            if crate::linksync::scan(&mut tx, &here, user).await? {
+                changed.push(user);
+            }
             tx.commit().await?;
         }
         Ok::<_, StoreError>(changed)
@@ -447,9 +459,183 @@ async fn scan_all(app: &crate::http::App, place: &Place) -> bool {
         Ok(c) => c,
         Err(e) => {
             eprintln!("hangar-server: looking for changes to linked records: {e}");
-            false
+            vec![]
         }
     }
+}
+
+/// Keeps a waiter on every link, and none on a link that has gone.
+async fn keep_waiters(
+    app: &Arc<crate::http::App>,
+    place: &Arc<Place>,
+    waiters: &mut HashMap<(Uuid, Uuid), tokio::task::JoinHandle<()>>,
+) {
+    let links = match async { app.store.begin().await?.links(None).await }.await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("hangar-server: reading links: {e}");
+            return;
+        }
+    };
+    let keys: std::collections::HashSet<(Uuid, Uuid)> =
+        links.iter().map(|l| (l.user_id, l.place_id)).collect();
+    waiters.retain(|k, w| {
+        let keep = keys.contains(k) && !w.is_finished();
+        if !keep {
+            w.abort();
+        }
+        keep
+    });
+    for (user, other) in keys {
+        waiters
+            .entry((user, other))
+            .or_insert_with(|| tokio::spawn(watch(app.clone(), place.clone(), user, other)));
+    }
+}
+
+/// How long a place holds a waiting request before answering that nothing
+/// changed: under the minute proxies commonly allow a quiet request.
+const HOLD: Duration = Duration::from_secs(45);
+
+/// What changes linked people's records here have been through, for the
+/// places waiting to hear of one: a count raised at each change, and what
+/// wakes those waiting. Kept in memory: a place that restarts counts from
+/// zero again, which a waiter takes as a change, and exchanges records.
+#[derive(Default)]
+pub struct Changes(std::sync::Mutex<HashMap<Uuid, (u64, Arc<tokio::sync::Notify>)>>);
+
+impl Changes {
+    /// A person's records here changed.
+    pub fn bump(&self, user: Uuid) {
+        let mut m = self.0.lock().unwrap();
+        let e = m.entry(user).or_default();
+        e.0 += 1;
+        e.1.notify_waiters();
+    }
+
+    fn now(&self, user: Uuid) -> (u64, Arc<tokio::sync::Notify>) {
+        self.0.lock().unwrap().entry(user).or_default().clone()
+    }
+
+    /// The count once it is not since, or as it is after within.
+    async fn after(&self, user: Uuid, since: u64, within: Duration) -> u64 {
+        let (count, notify) = self.now(user);
+        if count != since {
+            return count;
+        }
+        let woken = notify.notified();
+        tokio::pin!(woken);
+        woken.as_mut().enable();
+        if self.now(user).0 == since {
+            let _ = tokio::time::timeout(within, woken).await;
+        }
+        self.now(user).0
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct Wait {
+    count: u64,
+}
+
+/// Holds another place's waiting request until the person's records here
+/// change, or HOLD passes; answers with the count of changes.
+pub async fn answer_wait(
+    app: &crate::http::App,
+    place: &Place,
+    msg: &Sealed,
+) -> Result<Sealed, Refused> {
+    let link = admit(&app.store, msg.from, msg.person).await?;
+    let w: Wait = msg.read(place, "wait", &link.public_key)?;
+    let count = app.link_changes.after(link.user_id, w.count, HOLD).await;
+    Sealed::make(
+        place,
+        "waited",
+        msg.from,
+        &link.public_key,
+        msg.person,
+        Some(&msg.nonce),
+        &Wait { count },
+    )
+    .map_err(|e| {
+        eprintln!("hangar-server: answering a linked place: {e}");
+        Refused::Unproven
+    })
+}
+
+/// Waits on a linked place for as long as the link lasts: a request it
+/// holds until the person's records there change, and then an exchange
+/// of records, at once. So a place this one reaches, but which cannot
+/// reach this one, is heard as soon as it changes.
+async fn watch(app: Arc<crate::http::App>, place: Arc<Place>, user: Uuid, other: Uuid) {
+    let mut count = 0;
+    loop {
+        let found = async {
+            let mut tx = app.store.begin().await?;
+            let Some(link) = tx.link(user, other).await? else {
+                return Ok(None);
+            };
+            Ok::<_, StoreError>(Some((tx.person(user).await?, link)))
+        }
+        .await;
+        let (person, link) = match found {
+            Ok(Some(f)) => f,
+            Ok(None) => return,
+            Err(e) => {
+                eprintln!("hangar-server: reading a link: {e}");
+                tokio::time::sleep(EVERY).await;
+                continue;
+            }
+        };
+        match wait(&place, person, &link, count).await {
+            Ok(now) if now != count => {
+                count = now;
+                let synced = sync(&app, &place, person, &link).await.map(|()| Utc::now());
+                let kept = async {
+                    let mut tx = app.store.begin().await?;
+                    tx.set_synced(user, other, synced).await?;
+                    tx.commit().await
+                };
+                if let Err(e) = kept.await {
+                    eprintln!("hangar-server: recording a link: {e}");
+                }
+            }
+            Ok(_) => {}
+            Err(_) => tokio::time::sleep(EVERY).await,
+        }
+    }
+}
+
+/// One waiting request to a linked place: the count of changes there once
+/// it is not count, or as it is when the place stops holding it.
+async fn wait(place: &Place, person: Uuid, link: &Link, count: u64) -> Result<u64, String> {
+    let msg = Sealed::make(
+        place,
+        "wait",
+        link.place_id,
+        &link.public_key,
+        person,
+        None,
+        &Wait { count },
+    )?;
+    let url = format!("{}/api/link/v1/wait", link.url.trim_end_matches('/'));
+    let resp = client_within(HOLD + WITHIN)?
+        .post(&url)
+        .json(&msg)
+        .send()
+        .await
+        .map_err(|e| words(&e))?;
+    if !resp.status().is_success() {
+        return Err(format!("it answered {}", resp.status()));
+    }
+    let answer: Sealed = resp.json().await.map_err(|e| e.to_string())?;
+    if answer.from != link.place_id || answer.nonce != msg.nonce {
+        return Err("it answered another message".into());
+    }
+    let w: Wait = answer
+        .read(place, "waited", &link.public_key)
+        .map_err(|r| format!("its answer could not be read: {r:?}"))?;
+    Ok(w.count)
 }
 
 async fn reach_all(app: &crate::http::App, place: &Place) {
@@ -543,7 +729,9 @@ async fn sync(
     .await
     .map_err(|e| e.to_string())?;
     if taken > 0 {
-        // What came may be news to the other linked places.
+        // What came may be news to the other linked places, and to those
+        // waiting on this one.
+        app.link_changes.bump(user);
         app.links_wake.notify_one();
     }
     if !wanted.is_empty() {
@@ -626,6 +814,7 @@ pub async fn accept_push(
         Refused::NotLinked
     })?;
     if taken > 0 {
+        app.link_changes.bump(user);
         app.links_wake.notify_one();
     }
     Ok(())

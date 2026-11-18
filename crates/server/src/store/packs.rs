@@ -255,6 +255,7 @@ impl Tx {
     /// Writes a pack, made or changed; false when its owner has another of
     /// the same name.
     pub async fn put_pack(&mut self, k: &Pack, new: bool) -> Result<bool> {
+        self.signal(Signal::Records);
         let done = match &mut self.inner {
             Backend::Pg(tx) => {
                 let q = if new {
@@ -309,6 +310,7 @@ impl Tx {
     }
 
     pub async fn set_pack_paths(&mut self, pack: Uuid, paths: &[PackPath]) -> Result<()> {
+        self.signal(Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => {
                 sqlx::query("DELETE FROM pack_paths WHERE pack_id = $1")
@@ -337,6 +339,7 @@ impl Tx {
     }
 
     pub async fn delete_pack(&mut self, id: Uuid) -> Result<()> {
+        self.signal(Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => {
                 sqlx::query("DELETE FROM packs WHERE id = $1")

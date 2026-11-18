@@ -4,6 +4,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::rows::{LoginKey, ServerKey, SshKey, User};
+use super::signals::Signal;
 use super::{Backend, Result, Tx};
 
 /// What became of a sign-in key to be added.
@@ -64,6 +65,7 @@ impl Tx {
     }
 
     pub async fn insert_ssh_key(&mut self, k: &SshKey) -> Result<()> {
+        self.signal(Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => {
                 sqlx::query(
@@ -86,6 +88,7 @@ impl Tx {
 
     /// Deletes one of a person's SSH keys, giving its name.
     pub async fn delete_ssh_key(&mut self, user: Uuid, id: Uuid) -> Result<Option<String>> {
+        self.signal(Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => Ok(sqlx::query_scalar(
                 "DELETE FROM ssh_keys WHERE user_id = $1 AND id = $2 RETURNING name",
@@ -133,6 +136,7 @@ impl Tx {
     }
 
     pub async fn insert_login_key(&mut self, k: &LoginKey) -> Result<Added> {
+        self.signal(Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => {
                 let done = sqlx::query(
@@ -166,6 +170,7 @@ impl Tx {
 
     /// Deletes one of a person's sign-in keys, giving its name.
     pub async fn delete_login_key(&mut self, user: Uuid, id: Uuid) -> Result<Option<String>> {
+        self.signal(Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => Ok(sqlx::query_scalar(
                 "DELETE FROM ssh_login_keys WHERE user_id = $1 AND id = $2 RETURNING name",

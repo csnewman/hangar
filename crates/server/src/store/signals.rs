@@ -22,6 +22,9 @@ pub enum Signal {
     /// What profile sessions send: a person's keys, packs and copies, and
     /// conflicts' resolutions.
     Shared,
+    /// A record linked places share (`linksync`): a person's theme,
+    /// sign-in keys, SSH keys or own packs.
+    Records,
 }
 
 /// The channels a signal goes out on to other servers, and comes in on.
@@ -31,6 +34,7 @@ pub const CAPACITY_CHANNEL: &str = "hangar_capacity";
 pub const ENVIRONMENT_CHANNEL: &str = "environment_changed";
 pub const PACKS_CHANNEL: &str = "packs";
 pub const PROFILE_CHANNEL: &str = "hangar_profile";
+pub const RECORDS_CHANNEL: &str = "hangar_records";
 
 /// Everyone waiting on a signal in this process.
 #[derive(Default)]
@@ -40,6 +44,9 @@ pub struct Signals {
     pub placement: Notify,
     /// Wakes profile sessions to send again what has changed.
     pub shared: Notify,
+    /// Wakes the links, to send on a record that changed. It keeps a
+    /// wake given while they are busy.
+    pub records: Notify,
     pub changes: Changes,
 }
 
@@ -59,6 +66,7 @@ impl Signals {
             Signal::Placement => self.placement.notify_one(),
             Signal::Environment(id) => self.changes.publish(Some(id)),
             Signal::Shared => self.shared.notify_waiters(),
+            Signal::Records => self.records.notify_one(),
         }
     }
 
@@ -70,6 +78,7 @@ impl Signals {
         self.placement.notify_one();
         self.changes.publish(None);
         self.shared.notify_waiters();
+        self.records.notify_one();
     }
 
     /// The signal a notification from another server is.
@@ -79,6 +88,7 @@ impl Signals {
             PLACEMENT_CHANNEL | CAPACITY_CHANNEL => Some(Signal::Placement),
             ENVIRONMENT_CHANNEL => Uuid::parse_str(payload).ok().map(Signal::Environment),
             PACKS_CHANNEL | PROFILE_CHANNEL => Some(Signal::Shared),
+            RECORDS_CHANNEL => Some(Signal::Records),
             _ => None,
         }
     }
@@ -188,6 +198,7 @@ pub async fn listen(pool: sqlx::PgPool, signals: Arc<Signals>) {
                 ENVIRONMENT_CHANNEL,
                 PACKS_CHANNEL,
                 PROFILE_CHANNEL,
+                RECORDS_CHANNEL,
             ])
             .await
         {

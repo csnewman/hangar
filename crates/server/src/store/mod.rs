@@ -194,6 +194,7 @@ impl Tx {
                         Signal::Worker(id) => (signals::WORKER_CHANNEL, id.to_string()),
                         Signal::Placement => (signals::PLACEMENT_CHANNEL, String::new()),
                         Signal::Shared => (signals::PACKS_CHANNEL, String::new()),
+                        Signal::Records => (signals::RECORDS_CHANNEL, String::new()),
                         Signal::Environment(_) => continue,
                     };
                     sqlx::query("SELECT pg_notify($1, $2)")

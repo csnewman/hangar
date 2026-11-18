@@ -272,6 +272,7 @@ impl Tx {
 
     /// Sets a user's theme, saying whether there is such a user.
     pub async fn set_theme(&mut self, id: Uuid, theme: &str) -> Result<bool> {
+        self.signal(super::signals::Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => Ok(sqlx::query("UPDATE users SET theme = $2 WHERE id = $1")
                 .bind(id)

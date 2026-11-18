@@ -199,3 +199,68 @@ async fn packs_of_one_name_settle_the_same_in_both() {
     names.sort();
     assert_eq!(names, vec!["notes", "notes (2)"]);
 }
+
+/// A place that cannot reach the other is heard as soon as it changes all
+/// the same: the place that reaches it keeps a request waiting there, which
+/// it answers when its records change.
+#[tokio::test]
+async fn a_place_that_cannot_dial_out_is_heard_at_once() {
+    let (Some(a), Some(b)) = (place().await, place().await) else {
+        return;
+    };
+    let la = a.client.list_links().await.expect("a's links").into_inner();
+    let lb = b.client.list_links().await.expect("b's links").into_inner();
+    a.client
+        .put_link(
+            &lb.place.id,
+            &body(json!({
+                "public_key": lb.place.public_key,
+                "url": b.server.loopback_url(),
+                "person": la.person,
+            })),
+        )
+        .await
+        .expect("a links to b");
+    // b has a at an address that answers nothing.
+    b.client
+        .put_link(
+            &la.place.id,
+            &body(json!({
+                "public_key": la.place.public_key,
+                "url": "http://127.0.0.1:9",
+                "person": la.person,
+            })),
+        )
+        .await
+        .expect("b links to a");
+    eventually("a to reach b", || async {
+        let l = a.client.list_links().await.ok()?.into_inner();
+        l.items.into_iter().next()?.synced_at.map(|_| ())
+    })
+    .await;
+
+    let start = std::time::Instant::now();
+    let key = b
+        .client
+        .add_login_key(&body(
+            json!({ "public_key": format!("{LOGIN_KEY} from-b") }),
+        ))
+        .await
+        .expect("a sign-in key in b")
+        .into_inner();
+    eventually("a to hear of b's change", || async {
+        let keys = a.client.list_login_keys().await.ok()?.into_inner().items;
+        keys.into_iter().find(|k| k.fingerprint == key.fingerprint)
+    })
+    .await;
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(10),
+        "heard in {:?}, not at a's next round a minute on",
+        start.elapsed()
+    );
+    let b_link = b.client.list_links().await.expect("b's links").into_inner();
+    assert!(
+        b_link.items[0].reach_error.is_some(),
+        "b cannot reach a itself"
+    );
+}

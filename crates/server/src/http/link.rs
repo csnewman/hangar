@@ -15,6 +15,7 @@ pub fn routes() -> Router<Shared> {
         .route("/hello", post(hello))
         .route("/sync", post(sync))
         .route("/push", post(push))
+        .route("/wait", post(wait))
 }
 
 fn refusal(r: Refused) -> ApiError {
@@ -52,6 +53,14 @@ fn this_place(app: &Shared) -> Result<&link::Place, ApiError> {
 async fn sync(State(app): State<Shared>, Json(m): Json<Sealed>) -> Result<Json<Sealed>, ApiError> {
     let place = this_place(&app)?;
     link::answer_sync(&app, place, &m)
+        .await
+        .map(Json)
+        .map_err(refusal)
+}
+
+async fn wait(State(app): State<Shared>, Json(m): Json<Sealed>) -> Result<Json<Sealed>, ApiError> {
+    let place = this_place(&app)?;
+    link::answer_wait(&app, place, &m)
         .await
         .map(Json)
         .map_err(refusal)
