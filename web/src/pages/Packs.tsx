@@ -132,6 +132,7 @@ function CopyFiles({ copy, pack }: { copy: string; pack: Pack }) {
 
 // replacedBy says whose change replaced a kept version.
 function replacedBy(r: ReplacedFile): string {
+  if (r.merged) return 'Replaced when two packs were merged'
   if (r.by_here) return 'Replaced by a restore'
   return r.by ? `Replaced by ${r.by}'s newer change` : "Replaced by another place's newer change"
 }
@@ -191,6 +192,50 @@ function Replaced({ copy }: { copy: string }) {
       </table>
       {restore.error && <div className="alert">{restore.error.message}</div>}
     </Section>
+  )
+}
+
+// SameName offers, for a pack that linking renamed apart from another of
+// the owner's of the same name made in another place, to merge it into
+// that one or keep the two apart.
+function SameName({ pack }: { pack: Pack }) {
+  const qc = useQueryClient()
+  const navigate = useNavigate()
+  const packs = usePacks()
+  const other = (packs.data ?? []).find((k) => k.id === pack.same_name)
+  const done = () => {
+    void qc.invalidateQueries({ queryKey: packsKey })
+    void qc.invalidateQueries({ queryKey: ['pack', pack.id] })
+  }
+  const merge = useMutation({
+    mutationFn: () => api.mergePack(pack.id),
+    onSuccess: (k) => {
+      done()
+      navigate(packPath(k.id))
+    },
+  })
+  const apart = useMutation({ mutationFn: () => api.keepPackApart(pack.id), onSuccess: done })
+  if (!other) return null
+  const busy = merge.isPending || apart.isPending
+  return (
+    <div className="notice">
+      This pack was made in another of your places with the name of <strong>{other.name}</strong>, and was renamed
+      when the places were linked. Merging it into {other.name} joins their paths and files: of a file both have, the
+      one changed later is kept, and the other is kept in the copy&apos;s history for 7 days. The same happens in every
+      linked place.
+      <div className="files-copy">
+        <ConfirmButton
+          label={`Merge into ${other.name}`}
+          confirmLabel={`Merge into ${other.name}?`}
+          onConfirm={() => merge.mutate()}
+          disabled={busy}
+        />
+        <button type="button" className="btn btn-sm" disabled={busy} onClick={() => apart.mutate()}>
+          Keep Apart
+        </button>
+      </div>
+      {(merge.error ?? apart.error) && <div className="alert">{(merge.error ?? apart.error)?.message}</div>}
+    </div>
   )
 }
 
@@ -666,6 +711,7 @@ function PackBody({
           { id: 'files', label: 'Files' },
         ]}
       >
+        {pack.same_name && <SameName pack={pack} />}
         {!disabled && <ReachWarning pack={pack} />}
         {disabled && (
           <p className="pane-hint">

@@ -422,6 +422,37 @@ impl Tx {
         Ok(())
     }
 
+    /// Moves a shared copy to another pack, as merging its pack into
+    /// that one does.
+    pub async fn set_copy_pack(&mut self, id: Uuid, pack: Uuid, now: DateTime<Utc>) -> Result<()> {
+        self.signal(Signal::Records);
+        match &mut self.inner {
+            Backend::Pg(tx) => {
+                sqlx::query(
+                    "UPDATE copies SET pack_id = $2, updated_at = $3 WHERE id = $1 AND NOT personal",
+                )
+                .bind(id)
+                .bind(pack)
+                .bind(now)
+                .execute(&mut **tx)
+                .await?;
+            }
+            Backend::Json(tx) => {
+                for c in tx
+                    .work
+                    .copies
+                    .iter_mut()
+                    .filter(|c| c.id == id && !c.personal)
+                {
+                    c.pack_id = pack;
+                    c.updated_at = now;
+                }
+            }
+        }
+        self.signal(Signal::Shared);
+        Ok(())
+    }
+
     pub async fn delete_copy(&mut self, id: Uuid) -> Result<()> {
         match &mut self.inner {
             Backend::Pg(tx) => {

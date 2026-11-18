@@ -696,3 +696,115 @@ async fn a_default_copy_follows_the_person() {
     })
     .await;
 }
+
+/// Two packs of one name made apart, merged in one place: one pack in
+/// both, with both's paths and files; of a file both had, the one changed
+/// later, the other kept in the history of the place that merged.
+#[tokio::test]
+async fn packs_of_one_name_merge_in_every_place() {
+    let (Some(a), Some(b)) = (place().await, place().await) else {
+        return;
+    };
+    let mut made = vec![];
+    for (p, dir, file) in [(&a, "~/notes/", "~/notes/a"), (&b, "~/docs/", "~/docs/b")] {
+        let k = p
+            .admin
+            .create_pack(&body(json!({
+                "name": "notes",
+                "attach": "owner",
+                "paths": [
+                    { "path": dir, "sensitive": false },
+                    { "path": "~/both", "sensitive": false },
+                ],
+            })))
+            .await
+            .expect("a pack")
+            .into_inner();
+        let c = own_copy(p, &k.id).await;
+        put(p, &c, file, "its own\n").await;
+        put(p, &c, "~/both", &format!("from {file}\n")).await;
+        made.push(k.id);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    link(&a, &b).await;
+    let renamed = eventually("a to hold both, one marked as named alike", || async {
+        let packs = a.admin.list_packs().await.ok()?.into_inner();
+        let r = packs.iter().find(|k| k.same_name.is_some())?.clone();
+        (packs.iter().filter(|k| !k.builtin).count() == 2).then_some(r)
+    })
+    .await;
+    let kept = renamed.same_name.clone().expect("the other");
+    let kept_name = a.admin.get_pack(&kept).await.expect("it").into_inner().name;
+    assert_eq!(kept_name, "notes");
+    // Both copies' files reach a before it merges.
+    let (ra, ka) = (own_copy(&a, &renamed.id).await, own_copy(&a, &kept).await);
+    eventually("a to hold both packs' files", || async {
+        content(&a, &ra, "~/both").await?;
+        content(&a, &ka, "~/both").await.map(|_| ())
+    })
+    .await;
+
+    let merged = a
+        .admin
+        .merge_pack(&renamed.id)
+        .await
+        .expect("merging")
+        .into_inner();
+    assert_eq!(merged.id, kept);
+    for p in [&a, &b] {
+        let pack = eventually("one pack with both's paths and files", || async {
+            let packs = p.admin.list_packs().await.ok()?.into_inner();
+            let ours: Vec<_> = packs.into_iter().filter(|k| !k.builtin).collect();
+            (ours.len() == 1 && ours[0].id == kept && ours[0].paths.len() == 3).then_some(())?;
+            let c = own_copy(p, &kept).await;
+            content(p, &c, "~/notes/a").await?;
+            content(p, &c, "~/docs/b").await?;
+            (content(p, &c, "~/both").await? == "from ~/docs/b\n").then_some(c)
+        })
+        .await;
+        let _ = pack;
+    }
+    let c = own_copy(&a, &kept).await;
+    let h = a
+        .admin
+        .list_copy_history(&c)
+        .await
+        .expect("history")
+        .into_inner();
+    assert!(
+        h.iter()
+            .any(|r| r.path == "~/both" && r.merged == Some(true)),
+        "the earlier kept: {h:?}"
+    );
+}
+
+/// A pack kept apart from one of its name is offered for merging in
+/// neither place.
+#[tokio::test]
+async fn a_pack_kept_apart_is_kept_apart_everywhere() {
+    let (Some(a), Some(b)) = (place().await, place().await) else {
+        return;
+    };
+    for p in [&a, &b] {
+        p.admin
+            .create_pack(&body(json!({ "name": "tools", "paths": [] })))
+            .await
+            .expect("a pack");
+    }
+    link(&a, &b).await;
+    let renamed = eventually("b to mark one", || async {
+        let packs = b.admin.list_packs().await.ok()?.into_inner();
+        packs.into_iter().find(|k| k.same_name.is_some())
+    })
+    .await;
+    b.admin
+        .keep_pack_apart(&renamed.id)
+        .await
+        .expect("keeping it apart");
+    eventually("a to mark neither", || async {
+        let packs = a.admin.list_packs().await.ok()?.into_inner();
+        let ours: Vec<_> = packs.into_iter().filter(|k| !k.builtin).collect();
+        (ours.len() == 2 && ours.iter().all(|k| k.same_name.is_none())).then_some(())
+    })
+    .await;
+}

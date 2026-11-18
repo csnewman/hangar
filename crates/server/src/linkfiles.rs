@@ -289,6 +289,10 @@ pub struct Replaced {
     pub replaced_at: DateTime<Utc>,
     /// The place whose change replaced it.
     pub by: Uuid,
+    /// Replaced by merging two packs: the other's file of its path was
+    /// changed later.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub merged: bool,
 }
 
 /// The files a place is linking: copies changed and waiting to be looked
@@ -530,21 +534,115 @@ fn keep(root: &Root, copy: Uuid, path: &str, k: &FileVersion, by: Uuid) -> Resul
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(io(e)),
     };
+    keep_data(root, copy, path, &data, k.mode, k.time(), by, false)
+}
+
+/// Keeps data in a copy's history as a version of its file at path that
+/// another replaced.
+#[allow(clippy::too_many_arguments)]
+fn keep_data(
+    root: &Root,
+    copy: Uuid,
+    path: &str,
+    data: &[u8],
+    mode: u32,
+    time: i64,
+    by: Uuid,
+    merged: bool,
+) -> Result<(), String> {
     let id = Uuid::new_v4();
-    root.replace(&kept_path(copy, id), &data, 0o600, &staging())
+    root.replace(&kept_path(copy, id), data, 0o600, &staging())
         .map_err(io)?;
     let mut h: Vec<Replaced> = load(root, &history_path(copy))?;
     h.push(Replaced {
         id,
         path: path.to_string(),
         size: data.len() as u64,
-        mode: k.mode,
-        time: k.time(),
+        mode,
+        time,
         replaced_at: Utc::now(),
         by,
+        merged,
     });
     prune(root, copy, &mut h);
     save(root, &history_path(copy), &h)
+}
+
+/// Puts one copy's files into another, as merging two packs does: a file
+/// the other lacks is taken as it is; of a file both have that differ,
+/// the one changed later is kept, the other going into the copy's
+/// history. Which was changed later is as their versions say, which every
+/// linked place agrees on, else as the files' modification times. A file
+/// taken keeps its version, so a change made later elsewhere, arriving
+/// after, still wins. Gives the paths of the copy's files changed.
+pub fn merge_copy(root: &Root, place: Uuid, from: Uuid, into: Uuid) -> Result<Vec<String>, String> {
+    let sf: State = load(root, &state_path(from))?;
+    let mut si: State = load(root, &state_path(into))?;
+    let version = |st: &State, rel: &str| {
+        st.files
+            .get(rel)
+            .filter(|k| !k.v.deleted)
+            .map(|k| k.v.clone())
+    };
+    let when = |v: &Option<FileVersion>, info: &crate::root::Info| {
+        v.as_ref()
+            .map_or((info.modified.timestamp_millis(), place), |v| {
+                (v.time(), v.origin)
+            })
+    };
+    let theirs: HashMap<String, crate::root::Info> = root
+        .files(&into.to_string())
+        .map_err(io)?
+        .into_iter()
+        .collect();
+    let mut changed = vec![];
+    for (rel, info) in root.files(&from.to_string()).map_err(io)? {
+        if !valid(&rel) {
+            continue;
+        }
+        let data = match root.read(&file_path(from, &rel)) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(io(e)),
+        };
+        let mode = info.mode & 0o777;
+        let target = file_path(into, &rel);
+        let fv = version(&sf, &rel);
+        if let Some(there) = theirs.get(&rel) {
+            let mine = root.read(&target).map_err(io)?;
+            if mine == data {
+                continue;
+            }
+            let iv = version(&si, &rel);
+            let (a, b) = (when(&fv, &info), when(&iv, there));
+            if a <= b {
+                keep_data(root, into, &rel, &data, mode, a.0, place, true)?;
+                continue;
+            }
+            keep_data(
+                root,
+                into,
+                &rel,
+                &mine,
+                there.mode & 0o777,
+                b.0,
+                place,
+                true,
+            )?;
+        }
+        root.replace(&target, &data, mode, &staging()).map_err(io)?;
+        if let Some(v) = fv {
+            let seen = root.lstat(&target).ok().map(|i| Seen {
+                size: i.size,
+                mtime: i.modified.timestamp_nanos_opt().unwrap_or_default(),
+                mode: i.mode & 0o777,
+            });
+            si.files.insert(rel.clone(), Kept { v, seen, made: 0 });
+        }
+        changed.push(rel);
+    }
+    save(root, &state_path(into), &si)?;
+    Ok(changed)
 }
 
 /// Drops what is kept too long, and of each file all but the latest few.

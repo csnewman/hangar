@@ -809,6 +809,160 @@ pub async fn update_pack(
 
 /// Deletes a pack and every copy of its files. A built-in pack is not
 /// deleted.
+/// Whether a pack is one of a person's own, which their linked places
+/// share and which they may merge.
+fn own(k: &Pack, user: Uuid) -> bool {
+    k.owner_id == Some(user) && k.team_id.is_none() && !k.builtin
+}
+
+/// What merging a pack into another leaves to do once it is written: the
+/// copies whose files to remove, and the files of the person's own copy
+/// of the pack merged into that changed, to send to their linked places.
+#[derive(Default)]
+pub struct Merged {
+    pub removed: Vec<Uuid>,
+    pub changed: Vec<String>,
+}
+
+/// Merges a person's pack from into their pack into, in this place: the
+/// files of their own copy of it go into their own copy of into (of a
+/// file both have, the one changed later, the other kept in the copy's
+/// history), its shared copies become into's, a default copy that moved
+/// stays their default, and the pack is deleted. Every linked place does
+/// the same when it learns into has merged from. The caller has locked
+/// both packs, and removes the copies Merged says once it commits.
+pub async fn merge_here(
+    tx: &mut Tx,
+    root: &Root,
+    place: Uuid,
+    user: Uuid,
+    into: Uuid,
+    from: Uuid,
+) -> StoreResult<Merged> {
+    let mut out = Merged::default();
+    let copies = tx.copies().await?;
+    let now = Utc::now();
+    for c in copies.iter().filter(|c| c.pack_id == from) {
+        if !c.personal {
+            tx.set_copy_pack(c.id, into, now).await?;
+            continue;
+        }
+        if c.owner_id == Some(user) {
+            let dest = personal_copy(tx, into, user).await?;
+            out.changed = tokio::task::block_in_place(|| {
+                crate::linkfiles::merge_copy(root, place, c.id, dest)
+            })
+            .map_err(StoreError)?;
+        }
+        out.removed.push(c.id);
+    }
+    let defaults = tx.pack_defaults(user).await?;
+    if !defaults.iter().any(|d| d.pack_id == into)
+        && let Some(d) = defaults.iter().find(|d| d.pack_id == from)
+        && copies.iter().any(|c| c.id == d.copy_id && !c.personal)
+    {
+        tx.set_pack_default(user, into, Some(d.copy_id)).await?;
+    }
+    tx.lock_pack(from).await?;
+    tx.delete_pack(from).await?;
+    Ok(out)
+}
+
+/// Merges a pack that linking renamed apart from another of the person's
+/// of the same name into that one: its paths join that one's, and
+/// `merge_here` does the rest, here and in every linked place.
+pub async fn merge(
+    store: &Store,
+    root: &Root,
+    place: Uuid,
+    p: &Principal,
+    ip: &str,
+    id: Uuid,
+) -> fail::Result<(PackView, Vec<String>)> {
+    let mut tx = store.begin().await?;
+    tx.lock_pack(id).await?;
+    let w = World::load(&mut tx).await?;
+    let Some(from) = w.pack(p.into(), id) else {
+        return not_found();
+    };
+    if !own(&from.row, p.user_id) {
+        return fail::forbidden("only one's own packs are merged");
+    }
+    let Some(into) = from
+        .row
+        .same_name
+        .and_then(|o| w.packs.iter().find(|k| k.id == o && own(k, p.user_id)))
+        .cloned()
+    else {
+        return fail::invalid("this pack shares its name with none of yours");
+    };
+    tx.lock_pack(into.id).await?;
+    let mut paths = w.paths.get(&into.id).cloned().unwrap_or_default();
+    paths.extend(w.paths.get(&id).cloned().unwrap_or_default());
+    let paths = check_paths(&paths)?;
+    let mut k = into.clone();
+    k.merged.push(id);
+    k.merged.extend(from.row.merged.iter().copied());
+    k.merged.sort();
+    k.merged.dedup();
+    k.updated_at = Utc::now();
+    tx.put_pack(&k, false).await?;
+    tx.set_pack_paths(k.id, &rows_of(k.id, &paths)).await?;
+    let done = merge_here(&mut tx, root, place, p.user_id, k.id, id).await?;
+    let v = World::load(&mut tx)
+        .await?
+        .pack(p.into(), k.id)
+        .ok_or_else(|| Fail::NotFound("not found".into()))?;
+    audit::record(
+        &mut tx,
+        &p.actor(ip),
+        pack_event("file_pack.merge", &v).details(serde_json::json!({
+            "merged": id.to_string(),
+            "merged_name": from.row.name,
+            "paths": paths_of(&v.paths),
+        })),
+    )
+    .await?;
+    tx.commit().await?;
+    remove_copies(root, &done.removed)?;
+    Ok((v, done.changed))
+}
+
+/// Keeps a pack that linking renamed apart from another of the same name
+/// apart from it: it is no longer offered for merging, in any place.
+pub async fn keep_apart(
+    store: &Store,
+    p: &Principal,
+    ip: &str,
+    id: Uuid,
+) -> fail::Result<PackView> {
+    let mut tx = store.begin().await?;
+    tx.lock_pack(id).await?;
+    let w = World::load(&mut tx).await?;
+    let Some(cur) = w.pack(p.into(), id) else {
+        return not_found();
+    };
+    if !own(&cur.row, p.user_id) {
+        return fail::forbidden("only one's own packs are kept apart");
+    }
+    let mut k = cur.row.clone();
+    k.same_name = None;
+    k.updated_at = Utc::now();
+    tx.put_pack(&k, false).await?;
+    let v = World::load(&mut tx)
+        .await?
+        .pack(p.into(), id)
+        .ok_or_else(|| Fail::NotFound("not found".into()))?;
+    audit::record(
+        &mut tx,
+        &p.actor(ip),
+        pack_event("file_pack.keep_apart", &v),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(v)
+}
+
 pub async fn delete_pack(
     store: &Store,
     root: &Root,
@@ -1377,6 +1531,15 @@ async fn attached(
     for r in &spec.packs {
         let Ok(id) = Uuid::parse_str(&r.pack) else {
             continue;
+        };
+        // A pack merged into another is that one.
+        let id = if w.packs.iter().any(|k| k.id == id) {
+            id
+        } else {
+            w.packs
+                .iter()
+                .find(|k| k.merged.contains(&id))
+                .map_or(id, |k| k.id)
         };
         if out.iter().any(|(k, _, _)| k.row.id == id) {
             continue;

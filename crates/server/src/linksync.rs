@@ -436,8 +436,11 @@ pub async fn accept(tx: &mut Tx, here: &Here<'_>, user: Uuid, records: &[Record]
         .collect();
     let mut taken = 0;
     let mut removed_copies = vec![];
+    let mut renamed = vec![];
+    // Deletions last: a pack merged into another is deleted once the
+    // other has taken its copies.
     let mut records: Vec<&Record> = records.iter().collect();
-    records.sort_by_key(|r| rank(&r.version.kind));
+    records.sort_by_key(|r| (r.version.deleted, rank(&r.version.kind)));
     for r in records {
         let v = &r.version;
         if !kinds.contains(&v.kind.as_str()) {
@@ -452,7 +455,11 @@ pub async fn accept(tx: &mut Tx, here: &Here<'_>, user: Uuid, records: &[Record]
             (Some(b), false) => Some(b),
             (None, false) => continue,
         };
-        if !apply(tx, here, user, &v.kind, &v.id, body, &mut removed_copies).await? {
+        let mut done = Applied {
+            removed_copies: &mut removed_copies,
+            renamed: &mut renamed,
+        };
+        if !apply(tx, here, user, &v.kind, &v.id, body, &mut done).await? {
             continue;
         }
         tx.put_link_record(&LinkRecord {
@@ -471,12 +478,41 @@ pub async fn accept(tx: &mut Tx, here: &Here<'_>, user: Uuid, records: &[Record]
         .await?;
         taken += 1;
     }
+    // A pack renamed apart from another of its name is renamed the same
+    // way in every place that holds both, so the name is no change of
+    // this place's: its version stays, holding the name.
+    if !renamed.is_empty() {
+        let now = snapshot(tx, here, user).await?;
+        let known = tx.link_records(user).await?;
+        for id in renamed {
+            let key = (PACK.to_string(), id.to_string());
+            if let (Some(body), Some(r)) = (
+                now.get(&key),
+                known
+                    .iter()
+                    .find(|r| r.kind == key.0 && r.record_id == key.1),
+            ) {
+                tx.put_link_record(&LinkRecord {
+                    digest: digest(body),
+                    ..r.clone()
+                })
+                .await?;
+            }
+        }
+    }
     if !removed_copies.is_empty()
         && let Err(e) = crate::packs::remove_copies(here.root, &removed_copies)
     {
         eprintln!("hangar-server: removing the copies of a pack deleted elsewhere: {e:?}");
     }
     Ok(taken)
+}
+
+/// What taking records leaves to do: the copies whose files to remove,
+/// and the packs renamed apart from another of their name.
+struct Applied<'a> {
+    removed_copies: &'a mut Vec<Uuid>,
+    renamed: &'a mut Vec<Uuid>,
 }
 
 /// Writes one record to its table, or deletes it (body None). False when
@@ -488,7 +524,7 @@ async fn apply(
     kind: &str,
     id: &str,
     body: Option<&Value>,
-    removed_copies: &mut Vec<Uuid>,
+    done: &mut Applied<'_>,
 ) -> Result<bool> {
     let text = |b: &Value, k: &str| b[k].as_str().unwrap_or_default().to_string();
     match kind {
@@ -614,7 +650,7 @@ async fn apply(
             }
             let Some(b) = body else {
                 if existing.is_some() {
-                    removed_copies.extend(
+                    done.removed_copies.extend(
                         tx.copies()
                             .await?
                             .iter()
@@ -696,9 +732,11 @@ async fn apply(
                     if !tx.put_pack(&renamed, false).await? {
                         return Ok(false);
                     }
+                    done.renamed.push(other.id);
                 } else {
                     pack.name = free;
                     pack.same_name = Some(other.id);
+                    done.renamed.push(pack_id);
                 }
             }
             if !tx.put_pack(&pack, existing.is_none()).await? {
@@ -726,6 +764,15 @@ async fn apply(
                 })
                 .unwrap_or_default();
             tx.set_pack_paths(pack_id, &paths).await?;
+            // Packs merged into it in another place are merged here too.
+            for m in &pack.merged {
+                if packs.iter().any(|k| k.id == *m && own_pack(k, user)) {
+                    let merged =
+                        crate::packs::merge_here(tx, here.root, here.place, user, pack_id, *m)
+                            .await?;
+                    done.removed_copies.extend(merged.removed);
+                }
+            }
             Ok(true)
         }
         COPY => {
@@ -742,7 +789,7 @@ async fn apply(
             let Some(b) = body else {
                 if existing.is_some() {
                     tx.delete_copy(copy_id).await?;
-                    removed_copies.push(copy_id);
+                    done.removed_copies.push(copy_id);
                 }
                 return Ok(true);
             };

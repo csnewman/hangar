@@ -21,6 +21,8 @@ pub fn frontend() -> Router<Shared> {
         )
         .route("/packs/{id}/copies", get(list_copies).post(create_copy))
         .route("/packs/{id}/default", put(set_default))
+        .route("/packs/{id}/merge", post(merge_pack))
+        .route("/packs/{id}/keep-apart", post(keep_apart))
         .route(
             "/copies/{id}",
             get(get_copy).patch(rename_copy).delete(delete_copy),
@@ -96,6 +98,9 @@ fn pack_json(k: &PackView, default: Option<Uuid>) -> Value {
     }
     if let Some(c) = default {
         out["default_copy_id"] = json!(c.to_string());
+    }
+    if let Some(o) = r.same_name {
+        out["same_name"] = json!(o.to_string());
     }
     out
 }
@@ -188,6 +193,40 @@ async fn get_pack(
     let k = packs::pack(&app.store, &s.principal, id(&k)?)
         .await?
         .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not found"))?;
+    let d = packs::defaults(&app.store, &s.principal).await?;
+    Ok(Json(pack_json(&k, d.get(&k.row.id).copied())))
+}
+
+async fn merge_pack(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(k): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let place = app.place.as_ref().map_or(Uuid::nil(), |p| p.id);
+    let (k, changed) =
+        packs::merge(&app.store, &app.root, place, &s.principal, &s.ip, id(&k)?).await?;
+    // The files merged keep the versions they had, so no scan finds them:
+    // they are sent as they are.
+    let key = format!("pack:{}", k.row.id);
+    let jobs = changed
+        .into_iter()
+        .map(|path| crate::linkfiles::Job {
+            copy: key.clone(),
+            path,
+            send: crate::linkfiles::Carry::Content,
+        })
+        .collect();
+    app.link_conns.files(s.principal.user_id, None, jobs);
+    let d = packs::defaults(&app.store, &s.principal).await?;
+    Ok(Json(pack_json(&k, d.get(&k.row.id).copied())))
+}
+
+async fn keep_apart(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(k): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let k = packs::keep_apart(&app.store, &s.principal, &s.ip, id(&k)?).await?;
     let d = packs::defaults(&app.store, &s.principal).await?;
     Ok(Json(pack_json(&k, d.get(&k.row.id).copied())))
 }
@@ -423,6 +462,7 @@ async fn list_history(
                     "kept_until": r.replaced_at + chrono::Duration::days(7),
                     "by_here": Some(r.by) == here,
                     "by": links.iter().find(|l| l.place_id == r.by).map(|l| l.name.clone()),
+                    "merged": r.merged,
                 })
             })
             .collect(),

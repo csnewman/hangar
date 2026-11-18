@@ -290,6 +290,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/packs/{id}/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Merge a pack renamed apart from another of the owner's of the same name into that one, here and in every linked place: its paths join the other's, its owner's own copy's files go into their own copy of the other (of a file both have, the one changed later, the other kept in the copy's history), its shared copies become the other's, and it is deleted. Environments and templates that list it get the other. */
+        post: operations["mergePack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/packs/{id}/keep-apart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Keep a pack renamed apart from another of the same name apart from it: it is no longer offered for merging, in any linked place. */
+        post: operations["keepPackApart"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/copies/{id}": {
         parameters: {
             query?: never;
@@ -1394,6 +1432,8 @@ export interface components {
             default_paths?: components["schemas"]["PackPath"][];
             /** @description The copy the user chose to use by default, if they chose one; else their own. */
             default_copy_id?: string;
+            /** @description Another of the owner's packs, which had this one's name in another place when the two were linked: this one was renamed apart from it, and may be merged into it or kept apart. */
+            same_name?: string;
             can_change: boolean;
             can_delete: boolean;
             /** Format: date-time */
@@ -1469,8 +1509,10 @@ export interface components {
             kept_until: string;
             /** @description The name of the linked place whose change replaced it, when this place is linked with it directly. */
             by?: string | null;
-            /** @description Replaced here, by restoring another version. */
+            /** @description Replaced here, by restoring another version or by merging two packs. */
             by_here: boolean;
+            /** @description Replaced by merging two packs: the other pack's file of its path was changed later. */
+            merged?: boolean;
         };
         PackFileMode: {
             /** @description Its permissions, as chmod takes them (0o600 is 384). */
@@ -2722,6 +2764,57 @@ export interface operations {
             };
             400: components["responses"]["Invalid"];
             401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    mergePack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pack merged into. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pack"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    keepPackApart: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pack. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Pack"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };

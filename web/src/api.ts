@@ -138,6 +138,8 @@ export const api = {
     ),
   deleteCopyFile: (id: string, path: string) =>
     unwrap(client.DELETE('/api/frontend/copies/{id}/file', { params: { path: { id }, query: { path } } })),
+  mergePack: (id: string) => unwrap(client.POST('/api/frontend/packs/{id}/merge', byID(id))),
+  keepPackApart: (id: string) => unwrap(client.POST('/api/frontend/packs/{id}/keep-apart', byID(id))),
   copyHistory: (id: string) => unwrap(client.GET('/api/frontend/copies/{id}/history', byID(id))),
   restoreCopyFile: (id: string, entry: string) =>
     unwrap(client.POST('/api/frontend/copies/{id}/history/{entry}/restore', { params: { path: { id, entry } } })),

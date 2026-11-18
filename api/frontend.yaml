@@ -364,6 +364,48 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/frontend/packs/{id}/merge:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: mergePack
+      description: >-
+        Merge a pack renamed apart from another of the owner's of the same
+        name into that one, here and in every linked place: its paths join
+        the other's, its owner's own copy's files go into their own copy of
+        the other (of a file both have, the one changed later, the other
+        kept in the copy's history), its shared copies become the other's,
+        and it is deleted. Environments and templates that list it get the
+        other.
+      responses:
+        "200":
+          description: The pack merged into.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pack" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/packs/{id}/keep-apart:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: keepPackApart
+      description: >-
+        Keep a pack renamed apart from another of the same name apart from
+        it: it is no longer offered for merging, in any linked place.
+      responses:
+        "200":
+          description: The pack.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Pack" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/frontend/copies/{id}:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -1945,6 +1987,12 @@ components:
         default_copy_id:
           type: string
           description: The copy the user chose to use by default, if they chose one; else their own.
+        same_name:
+          type: string
+          description: >-
+            Another of the owner's packs, which had this one's name in
+            another place when the two were linked: this one was renamed
+            apart from it, and may be merged into it or kept apart.
         can_change: { type: boolean }
         can_delete: { type: boolean }
         created_at: { type: string, format: date-time }
@@ -2059,7 +2107,12 @@ components:
             place is linked with it directly.
         by_here:
           type: boolean
-          description: Replaced here, by restoring another version.
+          description: Replaced here, by restoring another version or by merging two packs.
+        merged:
+          type: boolean
+          description: >-
+            Replaced by merging two packs: the other pack's file of its path
+            was changed later.
 
     PackFileMode:
       type: object
