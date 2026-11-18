@@ -281,7 +281,9 @@ fn check_paths(input: &[Path]) -> fail::Result<Vec<Path>> {
             send_every: p.send_every,
         };
         check_path(&p.path).or_else(fail::invalid)?;
-        if p.send_every.is_some_and(|n| !(0..=MAX_SEND_EVERY).contains(&n)) {
+        if p.send_every
+            .is_some_and(|n| !(0..=MAX_SEND_EVERY).contains(&n))
+        {
             return fail::invalid(format!(
                 "{}: a file is sent at most once in {MAX_SEND_EVERY} seconds",
                 p.path

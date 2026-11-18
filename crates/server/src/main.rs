@@ -4,6 +4,7 @@
 mod audit;
 mod blob;
 mod certs;
+mod chunks;
 mod config;
 mod edge;
 mod environments;

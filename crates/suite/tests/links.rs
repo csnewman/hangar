@@ -579,3 +579,72 @@ async fn a_bandwidth_limit_reaches_every_place_and_paces_files() {
     })
     .await;
 }
+
+/// Text that looks random but is the same every run.
+fn text(n: usize, mut x: u64) -> String {
+    (0..n)
+        .map(|i| {
+            if i % 80 == 79 {
+                return '\n';
+            }
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            char::from(b'a' + (x % 26) as u8)
+        })
+        .collect()
+}
+
+/// A large file changed a little goes as what changed: under a limit
+/// that holds the whole file to seconds, an append and an edit each
+/// arrive in well under one.
+#[tokio::test]
+async fn a_large_file_changed_a_little_goes_as_what_changed() {
+    let (Some(a), Some(b)) = (place().await, place().await) else {
+        return;
+    };
+    link(&a, &b).await;
+    a.client
+        .set_link_settings(&clientapi::types::LinkSettings { bandwidth: 300_000 })
+        .await
+        .expect("a limit");
+    let (ca, cb) = (profile_copy(&a).await, profile_copy(&b).await);
+    let mut data = text(1_500_000, 9);
+    let arrives = |data: String| {
+        let (b, cb) = (&b, &cb);
+        async move {
+            let started = std::time::Instant::now();
+            eventually("b to take the file", || async {
+                (content(b, cb, "~/.netrc").await? == data).then_some(())
+            })
+            .await;
+            started.elapsed()
+        }
+    };
+
+    put(&a, &ca, "~/.netrc", &data).await;
+    let whole = arrives(data.clone()).await;
+    assert!(
+        whole > std::time::Duration::from_secs(2),
+        "whole: {whole:?}"
+    );
+
+    // Each change waits for the limit's last piece to have had its time.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    data.push_str("one more line\n");
+    put(&a, &ca, "~/.netrc", &data).await;
+    let appended = arrives(data.clone()).await;
+    assert!(
+        appended < std::time::Duration::from_millis(1500),
+        "appended: {appended:?}"
+    );
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    data.replace_range(700_000..700_010, "edited in the middle");
+    put(&a, &ca, "~/.netrc", &data).await;
+    let edited = arrives(data.clone()).await;
+    assert!(
+        edited < std::time::Duration::from_millis(1500),
+        "edited: {edited:?}"
+    );
+}

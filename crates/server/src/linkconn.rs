@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::http::App;
 use crate::link::{LEVELS, Place, Refused, Sealed};
-use crate::linkfiles::{FilePiece, FileVersions, FileWant, Job, MAX_FILE, PIECE};
+use crate::linkfiles::{Carry, FilePiece, FileVersions, FileWant, Job, MAX_FILE, PIECE};
 use crate::linksync::{Exchange, Here, Records, Versions};
 use crate::store::Error as StoreError;
 use crate::store::rows::Link;
@@ -801,7 +801,7 @@ fn outbox(
             .iter_mut()
             .find(|q| q.copy == j.copy && q.path == j.path)
         {
-            Some(q) => q.content |= j.content,
+            Some(q) => q.send = q.send.and(j.send),
             None => queue.push_back(j),
         };
         loop {
@@ -876,8 +876,7 @@ impl Pacer {
             tokio::time::sleep_until(next).await;
         }
         let start = self.next.map_or(Instant::now(), |n| n.max(Instant::now()));
-        self.next =
-            Some(start + Duration::from_secs_f64(bytes as f64 / self.bandwidth as f64));
+        self.next = Some(start + Duration::from_secs_f64(bytes as f64 / self.bandwidth as f64));
     }
 }
 
@@ -932,7 +931,7 @@ async fn piece(c: &Conn<'_>, frame: &[u8], incoming: &mut Incoming) -> Result<()
         .map_err(|r| format!("it could not be read: {r:?}"))?;
     let whole = if !p.content {
         Some((p, vec![]))
-    } else if p.version.size > MAX_FILE {
+    } else if p.version.size > MAX_FILE || p.total() > MAX_FILE {
         None
     } else {
         let key = (p.copy.clone(), p.path.clone());
@@ -952,7 +951,7 @@ async fn piece(c: &Conn<'_>, frame: &[u8], incoming: &mut Incoming) -> Result<()
         if incoming
             .0
             .get(&key)
-            .is_some_and(|(q, d)| d.len() as u64 >= q.version.size)
+            .is_some_and(|(q, d)| d.len() as u64 >= q.total())
         {
             incoming.0.remove(&key)
         } else {
@@ -963,18 +962,30 @@ async fn piece(c: &Conn<'_>, frame: &[u8], incoming: &mut Incoming) -> Result<()
         return Ok(());
     };
     let user = c.link.user_id;
+    let data = if p.delta.is_some() {
+        match crate::linkfiles::rebuild(c.app, user, &p, &data).await? {
+            Some(made) => made,
+            None => {
+                // This place's copy is not the one the delta is from: the
+                // file is asked for whole.
+                let want = FileWant {
+                    want: vec![(p.copy.clone(), p.path.clone())],
+                    bases: vec![],
+                };
+                let msg = sealed(c.place, "file_want", c.person, c.link, &want)?;
+                c.wire.send_sealed(&msg).await;
+                return Ok(());
+            }
+        }
+    } else {
+        data
+    };
     let t = crate::linkfiles::take(c.app, c.place.id, user, &p, &data).await?;
     for j in t.reply {
         let _ = c.out.send(j);
     }
     if !t.want.is_empty() {
-        let msg = sealed(
-            c.place,
-            "file_want",
-            c.person,
-            c.link,
-            &FileWant { want: t.want },
-        )?;
+        let msg = sealed(c.place, "file_want", c.person, c.link, &t.want)?;
         c.wire.send_sealed(&msg).await;
     }
     c.app.link_conns.files(user, Some(c.link.place_id), t.relay);
@@ -1146,8 +1157,7 @@ async fn answer(c: &Conn<'_>, text: &str) -> Result<bool, String> {
             let theirs: FileVersions = msg.read(c.place, "file_versions", key).map_err(unread)?;
             let found = crate::linkfiles::compare(app, c.place.id, user, &theirs).await?;
             if !found.want.is_empty() {
-                let want = FileWant { want: found.want };
-                let msg = sealed(c.place, "file_want", c.person, c.link, &want)?;
+                let msg = sealed(c.place, "file_want", c.person, c.link, &found.want)?;
                 c.wire.send_sealed(&msg).await;
             }
             for j in found.send {
@@ -1160,11 +1170,11 @@ async fn answer(c: &Conn<'_>, text: &str) -> Result<bool, String> {
         "file_want" => {
             let w: FileWant = msg.read(c.place, "file_want", key).map_err(unread)?;
             for (copy, path) in w.want {
-                let _ = c.out.send(Job {
-                    copy,
-                    path,
-                    content: true,
-                });
+                let send = match w.bases.iter().find(|b| b.copy == copy && b.path == path) {
+                    Some(b) => Carry::Delta(Arc::new(b.clone())),
+                    None => Carry::Whole,
+                };
+                let _ = c.out.send(Job { copy, path, send });
             }
             Ok(false)
         }

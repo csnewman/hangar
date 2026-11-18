@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
+pub use crate::chunks::{Base, Delta};
 use crate::fail::{self, Fail};
 use crate::http::App;
 use crate::root::Root;
@@ -145,15 +146,29 @@ pub struct FileVersions {
     pub copies: BTreeMap<String, Vec<Listed>>,
 }
 
-/// The files a place wants sent, by copy and path.
+/// The files a place wants sent, by copy and path, and of each it has an
+/// older copy of, what it has (`Base`), for the place sending to send
+/// what it lacks. A place of an older build lists no bases, and is sent
+/// every file whole.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct FileWant {
     pub want: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bases: Vec<Base>,
+}
+
+impl FileWant {
+    pub fn is_empty(&self) -> bool {
+        self.want.is_empty()
+    }
 }
 
 /// One file's version and a piece of its content, from offset, the whole
 /// being the version's size; without content, the version alone, for a
-/// place that has its content already or for a deleted file.
+/// place that has its content already, for a deleted file, or for the
+/// place to ask for what it lacks of a large file. With a delta, the
+/// pieces are the bytes it sends, which with the receiving place's older
+/// copy make the file; sent only to a place that listed that copy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilePiece {
     pub copy: String,
@@ -163,15 +178,70 @@ pub struct FilePiece {
     pub offset: u64,
     #[serde(default)]
     pub content: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delta: Option<Delta>,
 }
 
-/// A file to send, by copy and path; with its content, or its version
-/// alone.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+impl FilePiece {
+    /// How many bytes its pieces carry together.
+    pub fn total(&self) -> u64 {
+        self.delta.as_ref().map_or(self.version.size, |d| d.sent)
+    }
+}
+
+/// Files at least this large go first as their version alone, and then as
+/// what the other place lacks of them.
+const DELTA_MIN: u64 = 128 << 10;
+
+/// What of a file to send.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Carry {
+    /// Its version alone.
+    Version,
+    /// Its content: a file smaller than DELTA_MIN whole, a larger one's
+    /// version alone, which the other place answers with what it has.
+    Content,
+    /// Its content, whole.
+    Whole,
+    /// What a place that has this of it lacks.
+    Delta(Arc<Base>),
+}
+
+impl Carry {
+    fn rank(&self) -> u8 {
+        match self {
+            Carry::Version => 0,
+            Carry::Content => 1,
+            Carry::Delta(_) => 2,
+            Carry::Whole => 3,
+        }
+    }
+
+    /// What to send of a file asked for again before it went: the more of
+    /// the two, the later of two alike.
+    pub fn and(&self, later: Carry) -> Carry {
+        if later.rank() >= self.rank() {
+            later
+        } else {
+            self.clone()
+        }
+    }
+
+    fn content(deleted: bool) -> Carry {
+        if deleted {
+            Carry::Version
+        } else {
+            Carry::Content
+        }
+    }
+}
+
+/// A file to send, by copy and path.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Job {
     pub copy: String,
     pub path: String,
-    pub content: bool,
+    pub send: Carry,
 }
 
 /// What this place keeps of a file: its version, how the file was when
@@ -357,7 +427,13 @@ struct Scanned {
 /// made within its wait of its last version: that waits, and is read when
 /// the wait ends, so a file written in bursts is sent at most once a wait,
 /// as it is at the end of it.
-fn scan(root: &Root, place: Uuid, copy: Uuid, st: &mut State, wait: Wait) -> Result<Scanned, String> {
+fn scan(
+    root: &Root,
+    place: Uuid,
+    copy: Uuid,
+    st: &mut State,
+    wait: Wait,
+) -> Result<Scanned, String> {
     let files = root.files(&copy.to_string()).map_err(io)?;
     let mut present = HashSet::new();
     let mut changed = vec![];
@@ -584,8 +660,8 @@ pub async fn run(app: Arc<App>, place: Uuid) {
                 match next {
                     Some(at) => {
                         let ms = u64::try_from(at - now).unwrap_or(0).max(1);
-                        let _ = tokio::time::timeout(std::time::Duration::from_millis(ms), woken)
-                            .await;
+                        let _ =
+                            tokio::time::timeout(std::time::Duration::from_millis(ms), woken).await;
                     }
                     None => woken.await,
                 }
@@ -646,7 +722,7 @@ async fn look(app: &App, place: Uuid, copies: &[Uuid]) -> Result<(), String> {
             jobs.extend(changed.into_iter().map(|path| Job {
                 copy: key.clone(),
                 path,
-                content: true,
+                send: Carry::Content,
             }));
         }
         if !jobs.is_empty() {
@@ -667,7 +743,10 @@ pub async fn versions(
     let (all, paths) = {
         let mut tx = app.store.begin().await.map_err(store_err)?;
         let all = linked(&mut tx, user).await.map_err(store_err)?;
-        (all, crate::packs::all_paths(&mut tx).await.map_err(store_err)?)
+        (
+            all,
+            crate::packs::all_paths(&mut tx).await.map_err(store_err)?,
+        )
     };
     let _held = app.link_files.lock(user).await;
     let mut out = FileVersions::default();
@@ -688,7 +767,7 @@ pub async fn versions(
             changed.extend(found.changed.into_iter().map(|path| Job {
                 copy: l.key.clone(),
                 path,
-                content: true,
+                send: Carry::Content,
             }));
             Ok::<_, String>(
                 st.files
@@ -707,7 +786,7 @@ pub async fn versions(
 /// the way, for the person's other places.
 #[derive(Debug, Default)]
 pub struct Compared {
-    pub want: Vec<(String, String)>,
+    pub want: FileWant,
     pub send: Vec<Job>,
     pub found: Vec<Job>,
 }
@@ -724,7 +803,10 @@ pub async fn compare(
     let (all, paths) = {
         let mut tx = app.store.begin().await.map_err(store_err)?;
         let all = linked(&mut tx, user).await.map_err(store_err)?;
-        (all, crate::packs::all_paths(&mut tx).await.map_err(store_err)?)
+        (
+            all,
+            crate::packs::all_paths(&mut tx).await.map_err(store_err)?,
+        )
     };
     let _held = app.link_files.lock(user).await;
     let mut out = Compared::default();
@@ -744,7 +826,7 @@ pub async fn compare(
                 out.found.extend(found.changed.into_iter().map(|path| Job {
                     copy: l.key.clone(),
                     path,
-                    content: true,
+                    send: Carry::Content,
                 }));
                 Ok::<_, String>(st)
             })?,
@@ -775,7 +857,7 @@ pub async fn compare(
                     out.send.push(Job {
                         copy: l.key.clone(),
                         path: t.path.clone(),
-                        content: false,
+                        send: Carry::Version,
                     });
                 }
                 let k = st.files.get_mut(&t.path).expect("the file's version");
@@ -787,13 +869,20 @@ pub async fn compare(
             match o {
                 Order::Theirs { .. } => {
                     if !(t.version.deleted && mine.is_none_or(|m| m.deleted)) {
-                        out.want.push((l.key.clone(), t.path.clone()));
+                        out.want.want.push((l.key.clone(), t.path.clone()));
+                        if let Some(copy) = l.copy
+                            && let Some(b) = tokio::task::block_in_place(|| {
+                                base(&app.root, copy, &l.key, &t.path, mine, &t.version)
+                            })
+                        {
+                            out.want.bases.push(b);
+                        }
                     }
                 }
                 Order::Mine => out.send.push(Job {
                     copy: l.key.clone(),
                     path: t.path.clone(),
-                    content: !mine.is_some_and(|m| m.deleted),
+                    send: Carry::content(mine.is_some_and(|m| m.deleted)),
                 }),
                 Order::Same => {}
             }
@@ -803,7 +892,7 @@ pub async fn compare(
                 out.send.push(Job {
                     copy: l.key.clone(),
                     path: path.clone(),
-                    content: true,
+                    send: Carry::Content,
                 });
             }
         }
@@ -814,9 +903,29 @@ pub async fn compare(
     Ok(out)
 }
 
-/// A file to send: its version and content as this place holds them, or
-/// none when it holds no such file, or the file changed since its version
-/// was made (it is looked at again, and sent once it has a version).
+/// What this place has of a file whose newer version another place has,
+/// for that place to send what it lacks; none when the file is too small
+/// to be worth it, or this place has none.
+fn base(
+    root: &Root,
+    copy: Uuid,
+    key: &str,
+    path: &str,
+    mine: Option<&FileVersion>,
+    theirs: &FileVersion,
+) -> Option<Base> {
+    if theirs.deleted || theirs.size < DELTA_MIN || mine.is_none_or(|m| m.deleted || m.size == 0) {
+        return None;
+    }
+    let data = root.read(&file_path(copy, path)).ok()?;
+    Some(Base::of(key, path, &data))
+}
+
+/// A file to send: its version and the bytes its pieces carry, as this
+/// place holds it: the content whole, what a place that has a base
+/// lacks, or nothing for its version alone. None when it holds no such
+/// file, or the file changed since its version was made (it is looked
+/// at again, and sent once it has a version).
 pub async fn read(
     app: &App,
     user: Uuid,
@@ -831,14 +940,20 @@ pub async fn read(
         let Some(k) = st.files.get(&job.path) else {
             return Ok(None);
         };
-        let piece = FilePiece {
+        let mut piece = FilePiece {
             copy: job.copy.clone(),
             path: job.path.clone(),
             version: k.v.clone(),
             offset: 0,
-            content: job.content && !k.v.deleted,
+            content: false,
+            delta: None,
         };
-        if !piece.content {
+        let content = match job.send {
+            Carry::Version => false,
+            Carry::Content => k.v.size < DELTA_MIN,
+            Carry::Whole | Carry::Delta(_) => true,
+        };
+        if !content || k.v.deleted {
             return Ok(Some((piece, vec![])));
         }
         let data = match app.root.read(&file_path(copy, &job.path)) {
@@ -853,7 +968,46 @@ pub async fn read(
             app.link_files.mark([copy]);
             return Ok(None);
         }
+        piece.content = true;
+        if let Carry::Delta(base) = &job.send
+            && base.digest != k.v.digest
+            && let Some((delta, sent)) = crate::chunks::plan(base, &data)
+        {
+            piece.delta = Some(delta);
+            return Ok(Some((piece, sent)));
+        }
         Ok(Some((piece, data)))
+    })
+}
+
+/// The file a delta another place sent makes, from this place's copy of
+/// it; none when this place's is not the one the delta is from, which
+/// is then asked for whole.
+pub async fn rebuild(
+    app: &App,
+    user: Uuid,
+    piece: &FilePiece,
+    sent: &[u8],
+) -> Result<Option<Vec<u8>>, String> {
+    let Some(delta) = &piece.delta else {
+        return Ok(Some(sent.to_vec()));
+    };
+    if !valid(&piece.path) {
+        return Ok(None);
+    }
+    let Some(copy) = local(app, user, &piece.copy).await.map_err(store_err)? else {
+        return Ok(None);
+    };
+    tokio::task::block_in_place(|| {
+        let base = match app.root.read(&file_path(copy, &piece.path)) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(io(e)),
+        };
+        Ok(
+            crate::chunks::rebuild(delta, &base, sent, piece.version.size)
+                .filter(|made| sha256(made) == piece.version.digest),
+        )
     })
 }
 
@@ -867,7 +1021,7 @@ pub struct Taken {
     pub relay: Vec<Job>,
     /// To ask it for: a version sent without the content this place
     /// lacks.
-    pub want: Vec<(String, String)>,
+    pub want: FileWant,
     /// Changes made here, found on the way, for every place.
     pub found: Vec<Job>,
 }
@@ -898,10 +1052,10 @@ pub async fn take(
     }
     let _held = app.link_files.lock(user).await;
     let root = &app.root;
-    let job = |content| Job {
+    let job = |send| Job {
         copy: piece.copy.clone(),
         path: piece.path.clone(),
-        content,
+        send,
     };
     tokio::task::block_in_place(|| {
         // Every change made here is found first, however soon after the
@@ -913,7 +1067,7 @@ pub async fn take(
             .map(|path| Job {
                 copy: piece.copy.clone(),
                 path,
-                content: true,
+                send: Carry::Content,
             })
             .collect();
         let theirs = &piece.version;
@@ -923,10 +1077,10 @@ pub async fn take(
         } else if let Some(m) = mine.as_ref().filter(|m| m.same_content(theirs)) {
             let vv = merge(&m.vv, &theirs.vv);
             if vv != theirs.vv {
-                out.reply.push(job(false));
+                out.reply.push(job(Carry::Version));
             }
             if vv != m.vv {
-                out.relay.push(job(false));
+                out.relay.push(job(Carry::Version));
             }
             let k = st.files.get_mut(&piece.path).expect("the file's version");
             k.v.origin = if o == Order::Mine {
@@ -936,10 +1090,19 @@ pub async fn take(
             };
             k.v.vv = vv;
         } else if o == Order::Mine {
-            out.reply
-                .push(job(!mine.as_ref().is_some_and(|m| m.deleted)));
+            out.reply.push(job(Carry::content(
+                mine.as_ref().is_some_and(|m| m.deleted),
+            )));
         } else if !theirs.deleted && !piece.content {
-            out.want.push((piece.copy.clone(), piece.path.clone()));
+            out.want.want.push((piece.copy.clone(), piece.path.clone()));
+            out.want.bases.extend(base(
+                root,
+                copy,
+                &piece.copy,
+                &piece.path,
+                mine.as_ref(),
+                theirs,
+            ));
         } else if theirs.deleted && mine.as_ref().is_none_or(|m| m.deleted) {
             let vv = merge(&mine.map(|m| m.vv).unwrap_or_default(), &theirs.vv);
             st.files.insert(
@@ -974,7 +1137,7 @@ pub async fn take(
             };
             let vv = merge(&mine.map(|m| m.vv).unwrap_or_default(), &theirs.vv);
             if vv != theirs.vv {
-                out.reply.push(job(false));
+                out.reply.push(job(Carry::Version));
             }
             st.files.insert(
                 piece.path.clone(),
@@ -987,7 +1150,7 @@ pub async fn take(
                     made: 0,
                 },
             );
-            out.relay.push(job(!theirs.deleted));
+            out.relay.push(job(Carry::content(theirs.deleted)));
         }
         save(root, &state_path(copy), &st)
     })?;

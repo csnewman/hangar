@@ -78,10 +78,13 @@ async fn set_link_settings(
     Body(b): Body<types::LinkSettings>,
 ) -> Result<Json<types::LinkSettings>, ApiError> {
     if b.bandwidth < 0 {
-        return Err(ApiError::invalid("bandwidth is bytes a second, or 0 for no limit"));
+        return Err(ApiError::invalid(
+            "bandwidth is bytes a second, or 0 for no limit",
+        ));
     }
     let mut tx = app.store.begin().await?;
-    tx.set_link_bandwidth(s.principal.user_id, b.bandwidth).await?;
+    tx.set_link_bandwidth(s.principal.user_id, b.bandwidth)
+        .await?;
     tx.commit().await?;
     Ok(Json(types::LinkSettings {
         bandwidth: b.bandwidth,
