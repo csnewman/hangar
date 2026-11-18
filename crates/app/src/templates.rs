@@ -689,10 +689,9 @@ impl TemplatesView {
                 )
                 .into_any_element()
             }))
-            .child(
-                field("Who can use it", p).child(choice(
-                    "template-visibility",
-                    vec![
+            .child(field("Who can use it", p).child(choice(
+                "template-visibility",
+                vec![
                         (
                             if d.owner.is_empty() {
                                 "Owner and collaborators"
@@ -704,11 +703,10 @@ impl TemplatesView {
                         ),
                         ("Everyone here".to_string(), "shared".to_string()),
                     ],
-                    Some(d.visibility.clone()),
-                    me.clone(),
-                    |v: &mut Self, x, _, cx| v.edit(cx, |d| d.visibility = x),
-                )),
-            );
+                Some(d.visibility.clone()),
+                me.clone(),
+                |v: &mut Self, x, _, cx| v.edit(cx, |d| d.visibility = x),
+            )));
 
         // Machine.
         let short = |e: &Entity<InputState>| div().w(px(80.)).child(Input::new(e).small());

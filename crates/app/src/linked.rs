@@ -376,6 +376,82 @@ impl Render for LinkedView {
     }
 }
 
+/// An amount carried, in words.
+fn carried(n: u64) -> String {
+    match n {
+        n if n >= 1_000_000_000 => format!("{:.1} GB", n as f64 / 1e9),
+        n if n >= 1_000_000 => format!("{:.1} MB", n as f64 / 1e6),
+        n if n >= 1000 => format!("{:.0} kB", n as f64 / 1e3),
+        n => format!("{n} B"),
+    }
+}
+
+impl LinkedView {
+    /// Relay through this Mac, for a place: whether it is on, what it has
+    /// carried this month, whether it pauses on an expensive network, and
+    /// what it carries now.
+    fn relay_controls(&self, row: &linking::Row, p: &Palette, cx: &mut Context<Self>) -> gpui::Div {
+        use gpui_component::checkbox::Checkbox;
+        let relay = crate::relay::Relay::global();
+        let c = relay.config();
+        let on = c.places.contains(&row.id);
+        let id = row.id.clone();
+        let now = relay.relaying(&row.id);
+        let mut d = v_flex()
+            .gap(px(3.))
+            .pt(px(4.))
+            .text_color(p.text)
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .child(
+                        Checkbox::new(SharedString::from(format!("relay-{}", row.id)))
+                            .label("Relay through this Mac")
+                            .checked(on)
+                            .on_click(cx.listener(move |_, b: &bool, _, cx| {
+                                crate::relay::Relay::global().set_place(&id, *b);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(p.muted)
+                            .child(format!("{} this month", carried(relay.carried(&row.id)))),
+                    ),
+            )
+            .child(
+                Checkbox::new("relay-pause")
+                    .label("Pause on Personal Hotspot, cellular and Low Data Mode")
+                    .checked(!c.on_expensive)
+                    .on_click(cx.listener(|_, b: &bool, _, cx| {
+                        crate::relay::Relay::global().set_on_expensive(!*b);
+                        cx.notify();
+                    })),
+            );
+        if on && relay.paused() {
+            d = d.child(
+                div()
+                    .text_color(p.muted)
+                    .child("Paused: this Mac's network is expensive or in Low Data Mode."),
+            );
+        } else if !now.is_empty() {
+            d = d.child(
+                div()
+                    .text_color(p.muted)
+                    .child(format!("Carrying its link to {} now.", now.join(", "))),
+            );
+        } else if on {
+            d = d.child(
+                div()
+                    .text_color(p.muted)
+                    .child("Its links are carried whenever neither side reaches the other."),
+            );
+        }
+        d
+    }
+}
+
 /// The bandwidth limits the page offers, in bytes a second; 0 is none.
 const BANDWIDTHS: [i64; 6] = [0, 256_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000];
 
@@ -508,7 +584,7 @@ impl LinkedView {
                 row.name
             )),
             State::Waiting(_) => Some(format!(
-                "{} reaches no linked place, and none reaches it. Its changes wait until one can.",
+                "{} reaches no linked place, and none reaches it. Its changes wait until one can, or until this Mac relays them.",
                 row.name
             )),
             State::Behind(e) => Some(format!(
@@ -548,6 +624,9 @@ impl LinkedView {
                     )
                     .child(div().min_w_0().child(format!("{reached}{heard}{synced}"))),
             );
+        }
+        if !row.links.is_empty() {
+            d = d.child(self.relay_controls(row, p, cx));
         }
         if !row.links.is_empty() {
             let id = row.id.clone();

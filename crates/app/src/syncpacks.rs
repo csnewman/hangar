@@ -65,6 +65,8 @@ struct Held {
     /// has any.
     allowed: bool,
     linked: bool,
+    /// Its ID as linked places know it.
+    place_id: Option<String>,
 }
 
 fn read(sources: Vec<Source>) -> Vec<Held> {
@@ -81,6 +83,7 @@ fn read(sources: Vec<Source>) -> Vec<Held> {
                             packs: Err("Sign in to read its packs.".into()),
                             allowed: false,
                             linked: false,
+                            place_id: None,
                         };
                     };
                     let links = c.links().ok();
@@ -91,6 +94,7 @@ fn read(sources: Vec<Source>) -> Vec<Held> {
                         packs: c.packs().map_err(words),
                         allowed: links.as_ref().is_some_and(|l| l.allowed),
                         linked: links.as_ref().is_some_and(|l| !l.items.is_empty()),
+                        place_id: links.as_ref().map(|l| l.place.id.clone()),
                     }
                 })
             })
@@ -875,29 +879,88 @@ impl SyncPacksView {
         }
 
         d = d.child(heading("Syncs to", p));
-        let mut places = h_flex().gap(px(12.)).flex_wrap();
+        // The places it may be for: those linked that allow personal links.
+        let linked: Vec<(String, String)> = self
+            .held
+            .iter()
+            .filter(|h| h.allowed && h.linked)
+            .filter_map(|h| Some((h.name.clone(), h.place_id.clone()?)))
+            .collect();
+        let chosen: Vec<String> = k.places.clone();
+        let mut places = h_flex().gap(px(14.)).flex_wrap();
         for h in &self.held {
-            let has = entry.places.iter().any(|(pl, _, _)| pl == &h.place);
-            let state = if has {
-                "✓".to_string()
-            } else if h.packs.is_err() {
-                "not read".into()
+            let id = h.place_id.clone();
+            let on = id
+                .as_ref()
+                .is_some_and(|id| chosen.is_empty() || chosen.contains(id));
+            let why = if h.packs.is_err() {
+                Some("not read")
             } else if !h.allowed {
-                "not allowed by its administrators".into()
+                Some("not allowed by its administrators")
             } else if !h.linked {
-                "not linked".into()
+                Some("not linked")
             } else {
-                "not yet".into()
+                None
             };
-            places = places.child(
-                h_flex().gap(px(4.)).child(h.name.clone()).child(
-                    div()
-                        .text_color(if has { p.good } else { p.muted })
-                        .child(state),
-                ),
-            );
+            let mut row = h_flex().gap(px(4.));
+            match (
+                why,
+                id,
+                edit.as_ref().filter(|_| !entry.builtin && !self.busy),
+            ) {
+                (None, Some(id), Some(at)) => {
+                    let (all, chosen, at) = (linked.clone(), chosen.clone(), at.clone());
+                    let pack = k.id.clone();
+                    row = row.child(
+                        Checkbox::new(SharedString::from(format!("sync-place-{id}")))
+                            .label(h.name.clone())
+                            .checked(on)
+                            .on_click(cx.listener(move |v, b: &bool, _, cx| {
+                                // Every place, or those ticked.
+                                let mut now: Vec<String> = if chosen.is_empty() {
+                                    all.iter().map(|(_, i)| i.clone()).collect()
+                                } else {
+                                    chosen.clone()
+                                };
+                                now.retain(|x| x != &id);
+                                if *b {
+                                    now.push(id.clone());
+                                }
+                                if all.iter().all(|(_, i)| now.contains(i)) {
+                                    now.clear();
+                                }
+                                let Some(c) = v.client(&at.place, cx) else {
+                                    return;
+                                };
+                                let pack = pack.clone();
+                                v.act(cx, move || {
+                                    c.set_pack_places(&pack, &now)
+                                        .map(|_| ())
+                                        .map_err(|e| e.to_string())
+                                });
+                            })),
+                    );
+                }
+                _ => {
+                    row = row.child(h.name.clone()).child(
+                        div()
+                            .text_color(if on && why.is_none() { p.good } else { p.muted })
+                            .child(
+                                why.map_or(if on { "✓" } else { "kept away" }, |w| w)
+                                    .to_string(),
+                            ),
+                    );
+                }
+            }
+            places = places.child(row);
         }
         d = d.child(places);
+        if !entry.builtin {
+            d = d.child(note(
+                "A place left out holds the pack's name and paths, but not the pack: it is hidden there, and its files are removed from it and no more sent.",
+                p,
+            ));
+        }
 
         let history: Vec<(Detail, types::ReplacedFile)> = self
             .details

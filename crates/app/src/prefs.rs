@@ -33,6 +33,8 @@ pub enum Page {
     Places,
     /// Which of the person's places are linked, and Link Places.
     Linked,
+    /// The person's own templates across their places.
+    SyncTemplates,
     /// The person's packs across their places.
     Packs,
     /// A Hangar the app made on a Proxmox: where it runs, its release.
@@ -88,6 +90,7 @@ impl Page {
             Page::Notifications => "Notifications",
             Page::Places => "Places",
             Page::Linked => "Linked Places",
+            Page::SyncTemplates => "Templates",
             Page::Packs => "Packs",
             Page::Hangar(_) => "This Hangar",
             Page::Account(_) => "Account",
@@ -179,6 +182,7 @@ impl Page {
                 "bandwidth",
                 "sending",
             ],
+            Page::SyncTemplates => &["templates", "sync", "linked", "yours"],
             Page::Packs => &[
                 "packs",
                 "files",
@@ -299,6 +303,8 @@ pub struct SettingsView {
     linked: Option<Entity<crate::linked::LinkedView>>,
     /// The Packs page, made when first shown.
     sync_packs: Option<Entity<crate::syncpacks::SyncPacksView>>,
+    /// The Templates page under Sync, made when first shown.
+    sync_templates: Option<Entity<crate::synctemplates::SyncTemplatesView>>,
     /// The monospaced font families installed, found when the Terminal page
     /// is first shown.
     fonts: Option<Vec<String>>,
@@ -381,6 +387,7 @@ impl SettingsView {
             place_views: vec![],
             linked: None,
             sync_packs: None,
+            sync_templates: None,
             fonts: None,
             _subs: subs,
         };
@@ -498,6 +505,27 @@ impl SettingsView {
         view
     }
 
+    fn sync_templates(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Entity<crate::synctemplates::SyncTemplatesView> {
+        if let Some(v) = &self.sync_templates {
+            return v.clone();
+        }
+        let places = self.places.clone();
+        let view = cx.new(|cx| crate::synctemplates::SyncTemplatesView::new(places, cx));
+        self._subs.push(cx.subscribe(
+            &view,
+            |this, _, e: &crate::synctemplates::SyncTemplatesEvent, cx| match e {
+                crate::synctemplates::SyncTemplatesEvent::Open(place) => {
+                    this.show(Page::Templates(place.clone()), cx)
+                }
+            },
+        ));
+        self.sync_templates = Some(view.clone());
+        view
+    }
+
     fn sync_packs(&mut self, cx: &mut Context<Self>) -> Entity<crate::syncpacks::SyncPacksView> {
         if let Some(v) = &self.sync_packs {
             return v.clone();
@@ -586,7 +614,9 @@ impl Render for SettingsView {
                     .unwrap_or_default();
                 format!("{name} › {}", self.page.title())
             }
-            Page::Linked | Page::Packs => format!("Sync › {}", self.page.title()),
+            Page::Linked | Page::Packs | Page::SyncTemplates => {
+                format!("Sync › {}", self.page.title())
+            }
             page => format!("App › {}", page.title()),
         };
         let sheet = match self.page {
@@ -719,7 +749,7 @@ impl SettingsView {
             (
                 "sync".into(),
                 "Sync".into(),
-                vec![Page::Linked, Page::Packs],
+                vec![Page::Linked, Page::SyncTemplates, Page::Packs],
                 None,
             ),
         ];
@@ -802,6 +832,7 @@ impl SettingsView {
                     ),
                     Page::Linked => "settings-node-linked".into(),
                     Page::Packs => "settings-node-sync-packs".into(),
+                    Page::SyncTemplates => "settings-node-sync-templates".into(),
                     other => format!("settings-node-{}", other.title().to_lowercase()),
                 };
                 let go = page.clone();
@@ -855,6 +886,7 @@ impl SettingsView {
             Page::Places => self.places_page(p, cx).into_any_element(),
             Page::Linked => self.linked(cx).into_any_element(),
             Page::Packs => self.sync_packs(cx).into_any_element(),
+            Page::SyncTemplates => self.sync_templates(cx).into_any_element(),
             Page::Account(id) => self.account(&id, window, cx).into_any_element(),
             Page::Hangar(id) => self.hangar(&id, cx).into_any_element(),
             Page::Browser(id) => self.browser(&id, p, cx).into_any_element(),

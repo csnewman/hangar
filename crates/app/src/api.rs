@@ -14,9 +14,10 @@ use hangar_openapi::clientapi::{self as generated, types};
 use serde::Deserialize;
 
 pub use types::{
-    Access, AccessToken, ActivityEvent, AgentSession, Environment, EnvironmentPack, ImageRollback,
-    ImageUpdate, LogPart, LoginKey, Me, PackCopy, Process, ProcessList, Repo, Resources,
-    SignInGrant, SshGateway, SshKey, StartProgress, Task, Template, TerminalSession, Version,
+    Access, AccessToken, ActivityEvent, AgentSession, Environment, EnvironmentPack, FileConflict,
+    ImageRollback, ImageUpdate, LogPart, LoginKey, Me, PackCopy, Process, ProcessList, Repo,
+    Resources, SignInGrant, SshGateway, SshKey, StartProgress, Task, Template, TerminalSession,
+    Version,
 };
 
 /// An environment's machine, as its settings change it.
@@ -561,6 +562,13 @@ impl Client {
         self.all(first)
     }
 
+    /// The linked places one's own pack is for, by place ID; none for every
+    /// one.
+    pub fn set_pack_places(&self, id: &str, places: &[String]) -> Result<types::Pack, Error> {
+        let b: types::PackPlaces = Self::body(serde_json::json!({ "places": places }))?;
+        self.call(|c| c.set_pack_places(id, &b))
+    }
+
     /// Merges a pack renamed apart from another of the same name into it.
     pub fn merge_pack(&self, id: &str) -> Result<types::Pack, Error> {
         self.call(|c| c.merge_pack(id))
@@ -777,6 +785,32 @@ impl Client {
 
     /// Where a terminal session's WebSocket is, and the header that signs
     /// it in: session, or a new one at cols by rows.
+    /// The WebSocket through which this place carries its link to the
+    /// place other when the app relays it, and its authorization.
+    pub fn link_relay_socket(&self, other: &str) -> (String, String) {
+        let base = match self.base.split_once("://") {
+            Some(("https", rest)) => format!("wss://{rest}"),
+            Some((_, rest)) => format!("ws://{rest}"),
+            None => self.base.clone(),
+        };
+        (format!("{base}/me/links/{other}/relay"), self.auth())
+    }
+
+    /// This place's link endpoint, which other places dial: the far end
+    /// of a relayed link.
+    pub fn link_connect_socket(&self) -> (String, String) {
+        let root = self
+            .base
+            .strip_suffix(&format!("/api/{VERSION}"))
+            .unwrap_or(&self.base);
+        let root = match root.split_once("://") {
+            Some(("https", rest)) => format!("wss://{rest}"),
+            Some((_, rest)) => format!("ws://{rest}"),
+            None => root.to_string(),
+        };
+        (format!("{root}/api/link/v1/connect"), self.auth())
+    }
+
     pub fn terminal_socket(
         &self,
         id: &str,

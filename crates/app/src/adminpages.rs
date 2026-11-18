@@ -450,6 +450,8 @@ pub struct WorkersView {
     places: Entity<Places>,
     place: String,
     workers: Vec<types::Worker>,
+    /// Each worker's machine as the page has seen it, oldest first.
+    history: std::collections::HashMap<String, std::collections::VecDeque<types::WorkerStats>>,
     loaded: bool,
     selected: Option<String>,
     log: Option<String>,
@@ -466,6 +468,7 @@ impl WorkersView {
             places,
             place: place.to_string(),
             workers: vec![],
+            history: Default::default(),
             loaded: false,
             selected: None,
             log: None,
@@ -489,6 +492,15 @@ impl WorkersView {
                 v.loaded = true;
                 match r {
                     Ok(w) => {
+                        for x in &w {
+                            if let Some(s) = &x.stats {
+                                let h = v.history.entry(x.id.clone()).or_default();
+                                h.push_back(s.clone());
+                                while h.len() > crate::perf::KEPT {
+                                    h.pop_front();
+                                }
+                            }
+                        }
                         v.workers = w;
                         if v.selected.is_none() {
                             v.selected = v.workers.first().map(|w| w.id.clone());
@@ -681,22 +693,72 @@ impl WorkersView {
             out = out.child(field("GPU", p).child(div().child(what)));
         }
         if let Some(s) = &w.stats {
-            out = out
-                .child(
-                    field("CPU", p)
-                        .child(div().child(format!("{:.0}% · load {:.2}", s.cpu_percent, s.load1))),
-                )
-                .child(field("Memory", p).child(div().child(format!(
-                    "{} of {} used · {} in guests",
-                    gib(s.memory_used_mib),
-                    gib(s.memory_total_mib),
-                    gib(s.guest_memory_mib)
-                ))))
-                .child(field("Disk", p).child(div().child(format!(
-                    "{} of {}",
-                    bytes(s.disk_used_bytes),
-                    bytes(s.disk_total_bytes)
-                ))));
+            let seen: Vec<types::WorkerStats> = self
+                .history
+                .get(&w.id)
+                .map(|h| h.iter().cloned().collect())
+                .unwrap_or_default();
+            let series =
+                |f: fn(&types::WorkerStats) -> f64| seen.iter().map(f).collect::<Vec<f64>>();
+            out = out.child(section("Machine", p)).child(
+                h_flex()
+                    .gap(px(6.))
+                    .flex_wrap()
+                    .child(crate::perf::tile(
+                        "CPU",
+                        format!("{:.0}%", s.cpu_percent),
+                        series(|s| s.cpu_percent),
+                        100.,
+                        p.accent,
+                        None,
+                        p,
+                    ))
+                    .child(crate::perf::tile(
+                        "Memory",
+                        format!("{} of {}", gib(s.memory_used_mib), gib(s.memory_total_mib)),
+                        series(|s| s.memory_used_mib as f64),
+                        s.memory_total_mib as f64,
+                        p.busy,
+                        Some(format!(
+                            "{} in guests, {} in their monitors, {} in their support",
+                            gib(s.guest_memory_mib),
+                            gib(s.monitor_memory_mib),
+                            gib(s.support_memory_mib)
+                        )),
+                        p,
+                    ))
+                    .child(crate::perf::tile(
+                        "Load",
+                        format!("{:.2}", s.load1),
+                        series(|s| s.load1),
+                        0.,
+                        p.wait,
+                        None,
+                        p,
+                    ))
+                    .child(crate::perf::tile(
+                        "Disk",
+                        format!(
+                            "{} of {}",
+                            bytes(s.disk_used_bytes),
+                            bytes(s.disk_total_bytes)
+                        ),
+                        series(|s| s.disk_used_bytes as f64),
+                        s.disk_total_bytes as f64,
+                        p.good,
+                        None,
+                        p,
+                    ))
+                    .child(crate::perf::tile(
+                        "Swap",
+                        format!("{} of {}", gib(s.swap_used_mib), gib(s.swap_total_mib)),
+                        series(|s| s.swap_used_mib as f64),
+                        s.swap_total_mib as f64,
+                        p.idle,
+                        None,
+                        p,
+                    )),
+            );
         }
 
         out = out.child(section("Images", p));

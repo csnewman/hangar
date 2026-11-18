@@ -36,6 +36,7 @@ fn main() {
             );
             let places = places::from_env(cx);
             hangar_app::wake::watch(places.clone(), cx);
+            hangar_app::relay::watch(places.clone(), cx);
             let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
             cx.open_window(
                 WindowOptions {

@@ -184,6 +184,7 @@ fn main() {
                             "places" => Page::Places,
                             "linked" => Page::Linked,
                             "packs" => Page::Packs,
+                            "sync-templates" => Page::SyncTemplates,
                             "account" => Page::Account(first),
                             "templates" => Page::Templates(first),
                             "place-packs" => Page::PlacePacks(first),

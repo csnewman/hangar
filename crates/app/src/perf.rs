@@ -24,7 +24,7 @@ use crate::palette::{self, Palette};
 /// How often what it uses and its processes are read while shown.
 const POLL: Duration = Duration::from_secs(2);
 /// How many readings the charts keep: two minutes of them.
-const KEPT: usize = 60;
+pub const KEPT: usize = 60;
 /// How many events of its activity are read at a time.
 const PAGE: usize = 50;
 
@@ -796,7 +796,7 @@ fn ago(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
 /// One measure: its name, its reading, and its last readings drawn, scaled
 /// to top (or to their own highest, for 0), with more said of it on hover
 /// where there is more.
-fn tile(
+pub fn tile(
     name: &'static str,
     value: String,
     series: Vec<f64>,

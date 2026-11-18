@@ -258,6 +258,9 @@ pub struct EnvSettingsView {
     /// What was read of the server: its packs, the workers' sizes, what
     /// it uses as it runs.
     packs: Option<Result<Vec<EnvironmentPack>, String>>,
+    /// Files it had of its own where paths became shared, differing from
+    /// its copies'.
+    conflicts: Vec<crate::api::FileConflict>,
     sizes: Vec<Resources>,
     stats: Option<Stats>,
     /// What the memory slider runs between, while it runs.
@@ -379,6 +382,7 @@ impl EnvSettingsView {
                 .as_ref()
                 .is_some_and(|e| e.ports_public.unwrap_or_default()),
             copies: HashMap::new(),
+            conflicts: vec![],
             packs: None,
             sizes: vec![],
             stats: None,
@@ -431,12 +435,14 @@ impl EnvSettingsView {
                 client.environment_packs(&env),
                 client.worker_sizes(),
                 client.stats(&env),
+                client.conflicts(&env).unwrap_or_default(),
             )
         });
         cx.spawn(async move |this, cx| {
-            let (packs, sizes, stats) = task.await;
+            let (packs, sizes, stats, conflicts) = task.await;
             let _ = this.update(cx, |v, cx| {
                 v.packs = Some(packs.map_err(|e| e.to_string()));
+                v.conflicts = conflicts;
                 v.sizes = sizes.unwrap_or_default();
                 v.take_stats(stats.ok().flatten(), cx);
                 cx.notify();
@@ -993,6 +999,123 @@ impl EnvSettingsView {
             })
             .child(section("Image", p))
             .child(image)
+            .child(self.connect(env, p, cx))
+    }
+
+    /// How to reach it: SSH, its web servers; and what it cloned.
+    fn connect(&self, env: &Environment, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let places = self.places.read(cx);
+        let state = places.get(&self.place);
+        let server = state.map(|(c, _)| c.url.clone()).unwrap_or_default();
+        let me = state.and_then(|(_, s)| s.me.clone());
+        let ssh = me.as_ref().and_then(|m| crate::model::ssh_command(m, env));
+        let suffix = me.as_ref().and_then(|m| m.environment_host_suffix.clone());
+        let copy = |id: String, text: String| {
+            button(id, "Copy", p).on_click(move |_, _, cx| {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.clone()))
+            })
+        };
+        let mut out = v_flex().gap(px(10.)).child(section("Connect", p));
+        if let Some(cmd) = ssh {
+            out = out
+                .child(
+                    field("SSH", p).child(
+                        h_flex()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .font_family(crate::diff::mono())
+                                    .text_size(px(11.5))
+                                    .child(cmd.clone()),
+                            )
+                            .child(copy("env-ssh-copy".into(), cmd)),
+                    ),
+                )
+                .child(note(
+                    "With a sign-in key added under the place's Account.",
+                    p,
+                ));
+        }
+        if let Some(suffix) = suffix {
+            let names: Vec<Option<String>> = std::iter::once(None)
+                .chain(env.web_names.iter().cloned().map(Some))
+                .collect();
+            let mut list = v_flex().gap(px(4.));
+            for name in names {
+                let url = crate::ports::host_url(&server, name.as_deref(), &env.short_id, &suffix);
+                let open = url.clone();
+                list = list.child(
+                    h_flex()
+                        .gap(px(8.))
+                        .child(
+                            div()
+                                .w(px(90.))
+                                .text_color(p.muted)
+                                .child(name.clone().unwrap_or_else(|| "default".into())),
+                        )
+                        .child(
+                            div()
+                                .font_family(crate::diff::mono())
+                                .text_size(px(11.5))
+                                .child(url.trim_end_matches('/').to_string()),
+                        )
+                        .child(copy(
+                            format!("env-web-copy-{}", name.clone().unwrap_or_default()),
+                            url.clone(),
+                        ))
+                        .child(
+                            button(
+                                format!("env-web-open-{}", name.unwrap_or_default()),
+                                "Open",
+                                p,
+                            )
+                            .on_click(move |_, _, cx| cx.open_url(&open)),
+                        ),
+                );
+            }
+            out = out
+                .child(field("Web servers", p).child(list))
+                .child(note("HTTP reaches its port 80, and HTTPS its 443 whatever its certificate. Who may reach them is set under Ports.", p));
+        }
+        if !env.repos.is_empty() {
+            out = out.child(section("Repositories", p));
+            for r in &env.repos {
+                let mut what = vec![r.path.to_string()];
+                if let Some(x) = r.ref_.as_ref().filter(|x| !x.is_empty()) {
+                    what.push(format!("checked out at {x}"));
+                }
+                if let Some(b) = r.branch.as_ref().filter(|b| !b.is_empty()) {
+                    what.push(format!("on a new branch {b}"));
+                }
+                out = out.child(
+                    field("", p).child(
+                        v_flex()
+                            .child(
+                                div()
+                                    .font_family(crate::diff::mono())
+                                    .text_size(px(11.5))
+                                    .child(r.url.to_string()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(p.muted)
+                                    .child(what.join(" · ")),
+                            ),
+                    ),
+                );
+            }
+        }
+        if !env.projects.is_empty() {
+            out = out
+                .child(section("Projects", p))
+                .child(field("Folders", p).child(div().child(env.projects.join(", "))))
+                .child(note(
+                    "The folders its Code tab opens; a new terminal starts in the first.",
+                    p,
+                ));
+        }
+        out
     }
 
     fn resources(
@@ -1417,6 +1540,77 @@ impl EnvSettingsView {
                 rows.into_any_element()
             }
         };
+        let own = self
+            .places
+            .read(cx)
+            .get(&self.place)
+            .and_then(|(_, s)| s.me.as_ref().map(|m| m.id.clone()))
+            .zip(
+                self.places
+                    .read(cx)
+                    .get(&self.place)
+                    .and_then(|(_, s)| s.environment(&self.env).map(|e| e.owner_id.clone())),
+            )
+            .is_some_and(|(me, owner)| me == owner);
+        let mut conflicts = v_flex().gap(px(6.));
+        for c in &self.conflicts {
+            let pack = self
+                .packs
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .and_then(|l| l.iter().find(|k| k.copy.id == c.copy_id))
+                .map_or("a pack".to_string(), |k| k.name.clone());
+            let row = h_flex().gap(px(8.)).child(
+                v_flex()
+                    .flex_1()
+                    .child(
+                        div()
+                            .font_family(crate::diff::mono())
+                            .text_size(px(11.5))
+                            .child(c.path.clone()),
+                    )
+                    .child(div().text_size(px(11.)).text_color(p.muted).child(pack)),
+            );
+            let row =
+                match c.resolution.as_ref().map(|r| r.to_string()) {
+                    Some(r) => row.child(note(
+                        if r == "shared" {
+                            "Keeping the shared file…"
+                        } else {
+                            "Using this environment's…"
+                        },
+                        p,
+                    )),
+                    None if own => {
+                        let (a, b) = (
+                            (c.copy_id.clone(), c.path.clone()),
+                            (c.copy_id.clone(), c.path.clone()),
+                        );
+                        row.child(
+                            button(
+                                format!("conflict-shared-{}", c.path),
+                                "Keep the Shared One",
+                                p,
+                            )
+                            .on_click(
+                                cx.listener(move |v, _, _, cx| v.resolve(&a.0, &a.1, "shared", cx)),
+                            ),
+                        )
+                        .child(
+                            button(
+                                format!("conflict-env-{}", c.path),
+                                "Use This Environment's",
+                                p,
+                            )
+                            .on_click(cx.listener(
+                                move |v, _, _, cx| v.resolve(&b.0, &b.1, "environment", cx),
+                            )),
+                        )
+                    }
+                    None => row,
+                };
+            conflicts = conflicts.child(row);
+        }
         v_flex()
             .gap(px(10.))
             .child(section("Packs", p))
@@ -1425,6 +1619,37 @@ impl EnvSettingsView {
                 p,
             ))
             .child(body)
+            .when(!self.conflicts.is_empty(), |d| {
+                d.child(section("Conflicts", p))
+                    .child(note(
+                        "This environment had files of its own, differing from its copies', where paths became shared. The copies' are used; its own are kept aside until you choose. Using this environment's replaces the copy's file for everyone using the copy.",
+                        p,
+                    ))
+                    .child(conflicts)
+            })
+    }
+
+    /// Resolves a file conflict: keep the copy's file, or put the
+    /// environment's in the copy.
+    fn resolve(&mut self, copy: &str, path: &str, how: &str, cx: &mut Context<Self>) {
+        let Some(client) = self.client(cx) else {
+            return;
+        };
+        let (env, body) = (
+            self.env.clone(),
+            serde_json::json!({ "copy_id": copy, "path": path, "resolution": how }),
+        );
+        let task = cx.background_spawn(async move { client.resolve_conflict(&env, body) });
+        cx.spawn(async move |this, cx| {
+            let r = task.await;
+            let _ = this.update(cx, |v, cx| {
+                if let Err(e) = r {
+                    v.error = Some(e.to_string());
+                }
+                v.read(cx);
+            });
+        })
+        .detach();
     }
 
     /// Drafts the copy of a pack it is to use; None returns it to how it
