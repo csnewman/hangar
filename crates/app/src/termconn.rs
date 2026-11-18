@@ -37,8 +37,11 @@ pub enum Event {
         viewers: u16,
         owner: bool,
     },
-    /// The connection was lost, and is dialled again in the time given.
+    /// The connection was lost, and is dialled again in the time given,
+    /// or at once when told to Retry.
     Reconnecting { why: String, retry_in: Duration },
+    /// Dialling again, after Reconnecting.
+    Redialling,
     /// The shell exited, with its status.
     Exited(i32),
     /// The session cannot be reached: the server refused it.
@@ -54,6 +57,9 @@ pub enum Command {
     /// The size this window would have the terminal: its size while this
     /// connection holds it.
     Prefer(u16, u16),
+    /// Dial again now, rather than when the wait after a lost connection
+    /// ends.
+    Retry,
     Close,
 }
 
@@ -149,6 +155,7 @@ pub fn attach_in(
                     why,
                     retry_in: wait,
                 }) || !pause(wait, &rx, &mut size)
+                    || !events(Event::Redialling)
                 {
                     return;
                 }
@@ -159,8 +166,9 @@ pub fn attach_in(
     Connection { tx }
 }
 
-/// Waits before dialling again, keeping the size asked for; what is typed
-/// meanwhile is dropped, not sent late. False when the connection is closed.
+/// Waits before dialling again, keeping the size asked for, until the wait
+/// ends or Retry; what is typed meanwhile is dropped, not sent late. False
+/// when the connection is closed.
 fn pause(wait: Duration, rx: &Receiver<Command>, size: &mut (u16, u16)) -> bool {
     let until = Instant::now() + wait;
     loop {
@@ -171,6 +179,7 @@ fn pause(wait: Duration, rx: &Receiver<Command>, size: &mut (u16, u16)) -> bool 
         match rx.recv_timeout(left) {
             Ok(Command::Resize(c, r) | Command::Prefer(c, r)) => *size = (c, r),
             Ok(Command::Input(_)) => {}
+            Ok(Command::Retry) => return true,
             Ok(Command::Close) | Err(RecvTimeoutError::Disconnected) => return false,
             Err(RecvTimeoutError::Timeout) => return true,
         }
@@ -217,6 +226,7 @@ fn run(
                 Ok(Command::Input(b)) => frame(&mut ws, b'i', &b),
                 Ok(Command::Resize(c, r)) => sized(&mut ws, b'r', (c, r), size),
                 Ok(Command::Prefer(c, r)) => sized(&mut ws, b'p', (c, r), size),
+                Ok(Command::Retry) => Ok(()),
                 Ok(Command::Close) | Err(TryRecvError::Disconnected) => {
                     let _ = ws.close(None);
                     let _ = ws.flush();
@@ -235,7 +245,7 @@ fn run(
         let msg = match ws.read() {
             Ok(m) => m,
             Err(e) if crate::ws::idle(&e) => continue,
-            Err(e) => return lost(attached, e.to_string()),
+            Err(e) => return lost(attached, crate::ws::lost(&e)),
         };
         live.heard();
         let event = match msg {
@@ -297,7 +307,7 @@ fn frame(ws: &mut crate::ws::Socket, typ: u8, payload: &[u8]) -> Result<(), Stri
     b.push(typ);
     b.extend_from_slice(payload);
     ws.write(Message::Binary(b.into()))
-        .map_err(|e| e.to_string())
+        .map_err(|e| crate::ws::lost(&e))
 }
 
 /// Sends a size, to take (r) or as this window's (p), keeping it for the

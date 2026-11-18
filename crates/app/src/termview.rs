@@ -145,8 +145,12 @@ pub struct Sizing {
 pub enum State {
     Connecting,
     Live,
-    /// Lost, and being dialled again: why.
-    Reconnecting(String),
+    /// Lost, and dialled again: why, and how long until the next dial,
+    /// none while dialling.
+    Reconnecting {
+        why: String,
+        retry_in: Option<Duration>,
+    },
     Exited(i32),
     Failed(String),
 }
@@ -766,8 +770,15 @@ impl TerminalView {
                 self.resize_screen(c, r);
             }
             Event::Reconnecting { why, retry_in } => {
-                self.state =
-                    State::Reconnecting(format!("{why}. Retrying in {}", seconds(retry_in)));
+                self.state = State::Reconnecting {
+                    why,
+                    retry_in: Some(retry_in),
+                };
+            }
+            Event::Redialling => {
+                if let State::Reconnecting { retry_in, .. } = &mut self.state {
+                    *retry_in = None;
+                }
             }
             Event::Exited(code) => {
                 self.state = State::Exited(code);
@@ -1734,10 +1745,24 @@ impl Render for TerminalView {
             State::Connecting => Some("Connecting…".to_string()),
             State::Exited(code) => Some(format!("Session ended (exit code {code}).")),
             State::Failed(e) => Some(format!("Could not connect: {e}")),
-            State::Reconnecting(why) => Some(format!("Reconnecting: {why}")),
+            State::Reconnecting {
+                why,
+                retry_in: Some(d),
+            } => Some(format!("Reconnecting: {why}. Retrying in {}.", seconds(*d))),
+            State::Reconnecting {
+                why,
+                retry_in: None,
+            } => Some(format!("Reconnecting: {why}. Connecting…")),
             State::Live => None,
         };
-        let reconnecting = matches!(self.state, State::Reconnecting(_));
+        let reconnecting = matches!(self.state, State::Reconnecting { .. });
+        let waiting = matches!(
+            self.state,
+            State::Reconnecting {
+                retry_in: Some(_),
+                ..
+            }
+        );
         let ended = matches!(self.state, State::Exited(_));
         div()
             .id("terminal")
@@ -1948,6 +1973,16 @@ impl Render for TerminalView {
                         .text_size(px(11.))
                         .text_color(if reconnecting { p.busy } else { p.idle })
                         .child(n)
+                        .when(waiting, |d| {
+                            d.child(
+                                crate::ui::button("retry-now", "Retry Now", &p)
+                                    .debug_selector(|| "retry-now".into())
+                                    .on_click(cx.listener(|t, _, window, cx| {
+                                        window.focus(&t.focus, cx);
+                                        t.send(Command::Retry);
+                                    })),
+                            )
+                        })
                         .when(ended, |d| {
                             d.child(
                                 crate::ui::button("start-another", "New Session", &p)

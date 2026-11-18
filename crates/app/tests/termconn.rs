@@ -213,9 +213,70 @@ fn a_lost_connection_attaches_again_to_its_session() {
     assert!(matches!(next(), Event::Attached { session, .. } if session == "s1"));
     assert_eq!(next(), Event::Output(b"prompt$ ".to_vec()));
     assert!(matches!(next(), Event::Reconnecting { .. }));
+    assert_eq!(next(), Event::Redialling);
     assert_eq!(
         path(),
         "/api/v1/environments/env1/terminal?cols=80&rows=24&session=s1"
     );
     assert!(matches!(next(), Event::Attached { session, .. } if session == "s1"));
+}
+
+/// Retry ends the wait before dialling again: the waits grow while the
+/// environment stays down, and the one after Retry is skipped.
+#[test]
+fn retry_dials_again_at_once() {
+    let ln = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", ln.local_addr().unwrap());
+    thread::spawn(move || {
+        loop {
+            refuse(&ln, "409 Conflict", "the environment is not running")
+        }
+    });
+    let (tx, rx) = mpsc::channel();
+    let conn = termconn::attach(
+        &Client::new(&url, "hgr_t"),
+        "env1",
+        None,
+        80,
+        24,
+        move |e| tx.send(e).is_ok(),
+    );
+    let next = || rx.recv_timeout(Duration::from_secs(10)).expect("an event");
+    loop {
+        match next() {
+            Event::Reconnecting { retry_in, .. } if retry_in >= Duration::from_secs(4) => break,
+            Event::Reconnecting { .. } | Event::Redialling => {}
+            e => panic!("{e:?}"),
+        }
+    }
+    let asked = std::time::Instant::now();
+    conn.send(Command::Retry);
+    assert_eq!(next(), Event::Redialling);
+    assert!(asked.elapsed() < Duration::from_secs(1));
+}
+
+/// A server that takes the connection and never answers the handshake is
+/// given up, and dialled again.
+#[test]
+fn a_server_that_never_answers_is_given_up() {
+    let ln = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", ln.local_addr().unwrap());
+    thread::spawn(move || {
+        let held: Vec<_> = ln.incoming().take(2).collect();
+        thread::sleep(Duration::from_secs(30));
+        drop(held);
+    });
+    let (tx, rx) = mpsc::channel();
+    let _conn = termconn::attach(
+        &Client::new(&url, "hgr_t"),
+        "env1",
+        None,
+        80,
+        24,
+        move |e| tx.send(e).is_ok(),
+    );
+    match rx.recv_timeout(Duration::from_secs(20)).expect("an event") {
+        Event::Reconnecting { why, .. } => assert!(why.starts_with("no response from"), "{why}"),
+        e => panic!("{e:?}"),
+    }
 }

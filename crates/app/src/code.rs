@@ -261,7 +261,7 @@ fn run(
         let msg = match ws.read() {
             Ok(m) => m,
             Err(e) if crate::ws::idle(&e) => continue,
-            Err(e) => return lost(ready, e.to_string()),
+            Err(e) => return lost(ready, crate::ws::lost(&e)),
         };
         live.heard();
         let b = match msg {

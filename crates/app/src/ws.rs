@@ -19,10 +19,41 @@ pub type Socket = WebSocket<MaybeTlsStream<TcpStream>>;
 /// send: the most a key or a request waits to go.
 pub const POLL: Duration = Duration::from_millis(8);
 
-/// Whether a read error is only the wait running out.
+/// How long dialling a server may take, and its answering the WebSocket's
+/// handshake. Without them a server that has gone is waited for as long as
+/// the system allows a connect (75 s on macOS), and a handshake for ever.
+pub const DIAL_WITHIN: Duration = Duration::from_secs(10);
+pub const HANDSHAKE_WITHIN: Duration = Duration::from_secs(10);
+
+/// How long a write may make no progress before the connection is taken
+/// to be gone.
+pub const WRITE_WITHIN: Duration = Duration::from_secs(10);
+
+/// Whether a read error is only the wait running out: WouldBlock on Unix,
+/// where TimedOut is the connection itself timing out; TimedOut on Windows.
 pub fn idle(e: &tungstenite::Error) -> bool {
     matches!(e, tungstenite::Error::Io(e)
-        if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut))
+        if e.kind() == std::io::ErrorKind::WouldBlock
+            || (cfg!(windows) && e.kind() == std::io::ErrorKind::TimedOut))
+}
+
+/// Why a connection was lost, in words.
+pub fn lost(e: &tungstenite::Error) -> String {
+    use std::io::ErrorKind as K;
+    match e {
+        tungstenite::Error::Io(e) => match e.kind() {
+            K::TimedOut | K::WouldBlock => "the connection timed out".into(),
+            K::ConnectionReset => "the connection was reset".into(),
+            K::ConnectionAborted | K::BrokenPipe | K::UnexpectedEof => {
+                "the connection was closed".into()
+            }
+            _ => e.to_string(),
+        },
+        tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => {
+            "the server closed the connection".into()
+        }
+        e => e.to_string(),
+    }
 }
 
 /// Why a socket could not be opened.
@@ -81,8 +112,13 @@ pub fn connect(url: &str, auth: &str) -> Result<Socket, ConnectError> {
         .to_string();
     let tls = uri.scheme_str() == Some("wss");
     let port = uri.port_u16().unwrap_or(if tls { 443 } else { 80 });
-    let tcp = TcpStream::connect((host.as_str(), port)).map_err(unreachable)?;
+    let tcp = dial(&host, port)?;
     tcp.set_nodelay(true).map_err(unreachable)?;
+    tcp.set_read_timeout(Some(HANDSHAKE_WITHIN))
+        .map_err(unreachable)?;
+    tcp.set_write_timeout(Some(HANDSHAKE_WITHIN))
+        .map_err(unreachable)?;
+    let silent = || ConnectError::Unreachable(format!("no response from {host}:{port}"));
     let connector = if tls {
         let config = crate::api::tls_for(url).map_err(refused)?;
         Connector::Rustls(Arc::new(config))
@@ -106,6 +142,16 @@ pub fn connect(url: &str, auth: &str) -> Result<Socket, ConnectError> {
                     .unwrap_or_else(|_| format!("server returned {}", r.status()));
                 ConnectError::Refused(r.status().as_u16(), why)
             }
+            // A read or write that waited out HANDSHAKE_WITHIN.
+            tungstenite::HandshakeError::Interrupted(_) => silent(),
+            tungstenite::HandshakeError::Failure(tungstenite::Error::Io(e))
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                silent()
+            }
             e => ConnectError::Unreachable(e.to_string()),
         },
     )?;
@@ -116,7 +162,31 @@ pub fn connect(url: &str, auth: &str) -> Result<Socket, ConnectError> {
         _ => return Err(refused("unsupported stream type".into())),
     };
     sock.set_read_timeout(Some(POLL)).map_err(unreachable)?;
+    sock.set_write_timeout(Some(WRITE_WITHIN))
+        .map_err(unreachable)?;
     Ok(ws)
+}
+
+/// Connects to host's first address that answers within DIAL_WITHIN.
+fn dial(host: &str, port: u16) -> Result<TcpStream, ConnectError> {
+    use std::net::ToSocketAddrs;
+    let addrs = (host, port)
+        .to_socket_addrs()
+        .map_err(|e| ConnectError::Unreachable(e.to_string()))?;
+    let mut last = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, DIAL_WITHIN) {
+            Ok(tcp) => return Ok(tcp),
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(ConnectError::Unreachable(match last {
+        Some(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            format!("no response from {host}:{port}")
+        }
+        Some(e) => e.to_string(),
+        None => format!("{host} has no address"),
+    }))
 }
 
 /// How long a connection is quiet before it is pinged, and how long a ping
@@ -170,7 +240,7 @@ impl Liveness {
     pub fn check(&mut self, ws: &mut Socket) -> Result<(), String> {
         if self.due(SystemTime::now())? {
             ws.send(tungstenite::Message::Ping(Vec::new().into()))
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| lost(&e))?;
         }
         Ok(())
     }
