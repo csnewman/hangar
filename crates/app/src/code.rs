@@ -30,15 +30,19 @@ pub enum Notice {
     Event(String, Value),
     /// A language server's message, by the number lsp.start gave it.
     Lsp(u32, Value),
-    /// The connection was lost, and is dialled again in the time given.
-    /// Calls fail until the next Ready.
+    /// The connection was lost, and is dialled again in the time given,
+    /// or at once when told to retry. Calls fail until the next Ready.
     Lost { why: String, retry_in: Duration },
+    /// Dialling again, after Lost.
+    Redialling,
     /// The connection ended for good: the server refused it.
     Closed(String),
 }
 
 enum Out {
     Frame(Vec<u8>),
+    /// Dial again now, if waiting to.
+    Retry,
     Close,
 }
 
@@ -130,11 +134,18 @@ impl Code {
                     if !notices(Notice::Lost {
                         why,
                         retry_in: wait,
-                    }) || !pause(wait, &rx)
-                    {
+                    }) {
                         return;
                     }
-                    wait = (wait * 2).min(RETRY_MAX);
+                    let woke = pause(wait, &rx);
+                    if woke == Woke::Closed || !notices(Notice::Redialling) {
+                        return;
+                    }
+                    // Asked to retry, the waits start short again.
+                    wait = match woke {
+                        Woke::Retry => RETRY_FIRST,
+                        _ => (wait * 2).min(RETRY_MAX),
+                    };
                 }
             })
             .expect("starting a Code connection");
@@ -171,6 +182,11 @@ impl Code {
 }
 
 impl Code {
+    /// Dials again now, if the connection is lost and waiting to.
+    pub fn retry(&self) {
+        let _ = self.0.tx.send(Out::Retry);
+    }
+
     /// Sends a JSON-RPC message to a language server started on this
     /// connection; nothing, while it is lost.
     pub fn send_lsp(&self, server: u32, message: &Value) {
@@ -184,19 +200,28 @@ impl Code {
     }
 }
 
-/// Waits before dialling again, dropping what was sent for the connection
-/// lost. False when the connection is closed.
-fn pause(wait: Duration, rx: &Receiver<Out>) -> bool {
+/// How a wait before dialling again ended.
+#[derive(PartialEq)]
+enum Woke {
+    Elapsed,
+    Retry,
+    Closed,
+}
+
+/// Waits before dialling again, until the wait ends, Retry or the
+/// connection is closed, dropping what was sent for the connection lost.
+fn pause(wait: Duration, rx: &Receiver<Out>) -> Woke {
     let until = Instant::now() + wait;
     loop {
         let left = until.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            return true;
+            return Woke::Elapsed;
         }
         match rx.recv_timeout(left) {
             Ok(Out::Frame(_)) => {}
-            Ok(Out::Close) | Err(RecvTimeoutError::Disconnected) => return false,
-            Err(RecvTimeoutError::Timeout) => return true,
+            Ok(Out::Retry) => return Woke::Retry,
+            Ok(Out::Close) | Err(RecvTimeoutError::Disconnected) => return Woke::Closed,
+            Err(RecvTimeoutError::Timeout) => return Woke::Elapsed,
         }
     }
 }
@@ -226,7 +251,7 @@ fn run(
     if state.load(Ordering::SeqCst) == DOWN {
         loop {
             match rx.try_recv() {
-                Ok(Out::Frame(_)) => {}
+                Ok(Out::Frame(_) | Out::Retry) => {}
                 Ok(Out::Close) | Err(TryRecvError::Disconnected) => return Ok(End::Done),
                 Err(TryRecvError::Empty) => break,
             }
@@ -235,7 +260,7 @@ fn run(
     let mut ready = false;
     let lost = |ready: bool, why: String| Ok(End::Lost { ready, why });
     if let Err(e) = ws.write(Message::Binary(hello.into())) {
-        return lost(ready, e.to_string());
+        return lost(ready, crate::ws::lost(&e));
     }
     let mut live = Liveness::default();
     loop {
@@ -243,9 +268,10 @@ fn run(
             match rx.try_recv() {
                 Ok(Out::Frame(f)) => {
                     if let Err(e) = ws.write(Message::Binary(f.into())) {
-                        return lost(ready, e.to_string());
+                        return lost(ready, crate::ws::lost(&e));
                     }
                 }
+                Ok(Out::Retry) => {}
                 Ok(Out::Close) | Err(TryRecvError::Disconnected) => {
                     let _ = ws.close(None);
                     let _ = ws.flush();

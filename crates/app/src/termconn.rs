@@ -154,34 +154,48 @@ pub fn attach_in(
                 if !events(Event::Reconnecting {
                     why,
                     retry_in: wait,
-                }) || !pause(wait, &rx, &mut size)
-                    || !events(Event::Redialling)
-                {
+                }) {
                     return;
                 }
-                wait = (wait * 2).min(RETRY_MAX);
+                let woke = pause(wait, &rx, &mut size);
+                if woke == Woke::Closed || !events(Event::Redialling) {
+                    return;
+                }
+                // Asked to retry, the waits start short again.
+                wait = match woke {
+                    Woke::Retry => RETRY_FIRST,
+                    _ => (wait * 2).min(RETRY_MAX),
+                };
             }
         })
         .expect("starting a terminal's connection");
     Connection { tx }
 }
 
+/// How a wait before dialling again ended.
+#[derive(PartialEq)]
+enum Woke {
+    Elapsed,
+    Retry,
+    Closed,
+}
+
 /// Waits before dialling again, keeping the size asked for, until the wait
-/// ends or Retry; what is typed meanwhile is dropped, not sent late. False
-/// when the connection is closed.
-fn pause(wait: Duration, rx: &Receiver<Command>, size: &mut (u16, u16)) -> bool {
+/// ends, Retry or the connection is closed; what is typed meanwhile is
+/// dropped, not sent late.
+fn pause(wait: Duration, rx: &Receiver<Command>, size: &mut (u16, u16)) -> Woke {
     let until = Instant::now() + wait;
     loop {
         let left = until.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            return true;
+            return Woke::Elapsed;
         }
         match rx.recv_timeout(left) {
             Ok(Command::Resize(c, r) | Command::Prefer(c, r)) => *size = (c, r),
             Ok(Command::Input(_)) => {}
-            Ok(Command::Retry) => return true,
-            Ok(Command::Close) | Err(RecvTimeoutError::Disconnected) => return false,
-            Err(RecvTimeoutError::Timeout) => return true,
+            Ok(Command::Retry) => return Woke::Retry,
+            Ok(Command::Close) | Err(RecvTimeoutError::Disconnected) => return Woke::Closed,
+            Err(RecvTimeoutError::Timeout) => return Woke::Elapsed,
         }
     }
 }

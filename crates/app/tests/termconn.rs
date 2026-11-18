@@ -253,6 +253,10 @@ fn retry_dials_again_at_once() {
     conn.send(Command::Retry);
     assert_eq!(next(), Event::Redialling);
     assert!(asked.elapsed() < Duration::from_secs(1));
+    assert!(
+        matches!(next(), Event::Reconnecting { retry_in, .. } if retry_in < Duration::from_secs(1)),
+        "after Retry the waits start short again"
+    );
 }
 
 /// A server that takes the connection and never answers the handshake is

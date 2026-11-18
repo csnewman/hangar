@@ -127,6 +127,9 @@ impl PortsView {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe(&places, |_, _, cx| cx.notify()).detach();
+        // Its state (reconnecting, the wait before the next dial) is drawn
+        // here.
+        cx.observe(&workspace, |_, _, cx| cx.notify()).detach();
         cx.spawn(async move |this: WeakEntity<Self>, cx| {
             loop {
                 cx.background_executor().timer(POLL).await;
@@ -466,11 +469,18 @@ impl Render for PortsView {
         let state = self.workspace.read(cx).state().clone();
         body = body.child(heading("Listening", &p));
         match &self.ports {
+            None if matches!(state, State::Reconnecting(_)) => {
+                body = body.child(crate::workspace::reconnecting(
+                    &self.workspace,
+                    "ports-retry",
+                    &p,
+                    cx,
+                ))
+            }
             None => {
                 body = body.child(note(
                     match &state {
                         State::Failed(e) => format!("Could not reach the Code service: {e}"),
-                        State::Reconnecting(why) => State::reconnecting(why),
                         _ => "Loading…".into(),
                     },
                     &p,

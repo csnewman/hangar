@@ -352,6 +352,9 @@ impl Focusable for ProjectView {
 impl ProjectView {
     /// Shows the workspace's projects, as it connects to them.
     pub fn new(workspace: Entity<Workspace>, cx: &mut Context<Self>) -> Self {
+        // Its state (reconnecting, the wait before the next dial) is drawn
+        // here.
+        cx.observe(&workspace, |_, _, cx| cx.notify()).detach();
         let sub = cx.subscribe(&workspace, |v, _, e: &Event, cx| v.heard(e, cx));
         let mut view = ProjectView {
             workspace,
@@ -1565,7 +1568,14 @@ impl Render for ProjectView {
             .collect();
         match (&state, scope) {
             (State::Connecting, _) => list = list.child(muted("Connecting…", &p)),
-            (State::Reconnecting(why), _) => list = list.child(muted(State::reconnecting(why), &p)),
+            (State::Reconnecting(_), _) => {
+                list = list.child(crate::workspace::reconnecting(
+                    &self.workspace,
+                    "project-retry",
+                    &p,
+                    cx,
+                ))
+            }
             (State::Failed(e), _) => {
                 list = list.child(muted(format!("Could not reach the Code service: {e}"), &p))
             }

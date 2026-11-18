@@ -288,6 +288,9 @@ impl gpui::EventEmitter<ShowDiff> for GitView {}
 
 impl GitView {
     pub fn new(workspace: Entity<Workspace>, cx: &mut Context<Self>) -> Self {
+        // Its state (reconnecting, the wait before the next dial) is drawn
+        // here.
+        cx.observe(&workspace, |_, _, cx| cx.notify()).detach();
         let sub = cx.subscribe(&workspace, |v, _, e: &Event, cx| match e {
             Event::Projects => v.read_repos(cx),
             Event::Heard { root, event, .. } if event == "git.changed" => {
@@ -1461,7 +1464,9 @@ impl Render for GitView {
 
         let log: gpui::AnyElement = match (&state, &self.error) {
             (State::Connecting, _) => note("Connecting…", &p),
-            (State::Reconnecting(why), _) => note(State::reconnecting(why), &p),
+            (State::Reconnecting(_), _) => {
+                crate::workspace::reconnecting(&self.workspace, "git-retry", &p, cx)
+            }
             (State::Failed(e), _) => note(format!("Could not reach the Code service: {e}"), &p),
             (_, Some(e)) => note(e.clone(), &p),
             _ if self.chosen.is_none() => note(

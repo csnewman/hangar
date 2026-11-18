@@ -630,6 +630,27 @@ impl Shell {
             }))
     }
 
+    /// A link that makes an offline place's connection again now.
+    fn retry_link(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        place: &str,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let place = place.to_string();
+        div()
+            .id(id)
+            .text_color(p.accent)
+            .cursor_pointer()
+            .hover(|s| s.underline())
+            .child("Retry")
+            .on_click(cx.listener(move |s, _, _, cx| {
+                cx.stop_propagation();
+                s.places.update(cx, |pl, cx| pl.retry(&place, cx));
+            }))
+    }
+
     /// Opens the form adding a place, at a place's address, to sign it in
     /// again.
     pub fn sign_in_again(&mut self, place: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -1525,6 +1546,7 @@ impl Shell {
         for g in groups {
             let (ctone, state, warn) = model::connection(&g.connection);
             let signed_out = g.connection == crate::place::Connection::SignIn;
+            let offline = matches!(g.connection, crate::place::Connection::Offline { .. });
             let open = !self.collapsed.contains(&g.place);
             let id = g.place.clone();
             let mut group = v_flex().gap(px(1.)).child(
@@ -1570,11 +1592,23 @@ impl Shell {
                             .text_size(px(10.5))
                             .into_any_element()
                         } else {
-                            div()
+                            h_flex()
                                 .ml_auto()
+                                .gap(px(6.))
                                 .text_size(px(10.5))
-                                .text_color(if warn { p.busy } else { p.muted })
-                                .child(s)
+                                .child(
+                                    div()
+                                        .text_color(if warn { p.busy } else { p.muted })
+                                        .child(s),
+                                )
+                                .when(offline, |d| {
+                                    d.child(self.retry_link(
+                                        SharedString::from(format!("sidebar-retry-{}", g.place)),
+                                        &g.place,
+                                        p,
+                                        cx,
+                                    ))
+                                })
                                 .into_any_element()
                         })
                     })
@@ -1855,6 +1889,7 @@ impl Shell {
                 for g in by_place {
                     let (ctone, state, warn) = model::connection(&g.connection);
                     let signed_out = g.connection == crate::place::Connection::SignIn;
+                    let offline = matches!(g.connection, crate::place::Connection::Offline { .. });
                     body = body.child(
                         v_flex()
                             .gap(px(8.))
@@ -1885,10 +1920,29 @@ impl Shell {
                                             .text_size(px(11.))
                                             .into_any_element()
                                         } else {
-                                            div()
+                                            h_flex()
+                                                .gap(px(6.))
                                                 .text_size(px(11.))
-                                                .text_color(if warn { p.busy } else { p.muted })
-                                                .child(s)
+                                                .child(
+                                                    div()
+                                                        .text_color(if warn {
+                                                            p.busy
+                                                        } else {
+                                                            p.muted
+                                                        })
+                                                        .child(s),
+                                                )
+                                                .when(offline, |d| {
+                                                    d.child(self.retry_link(
+                                                        SharedString::from(format!(
+                                                            "home-retry-{}",
+                                                            g.place
+                                                        )),
+                                                        &g.place,
+                                                        p,
+                                                        cx,
+                                                    ))
+                                                })
                                                 .into_any_element()
                                         })
                                     }),

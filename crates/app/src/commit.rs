@@ -221,6 +221,9 @@ impl CommitView {
         let subs = vec![
             cx.subscribe(&branch, |_, _, e: &ShowDiff, cx| cx.emit(e.clone())),
             cx.subscribe(&branch, |_, _, e: &OpenFile, cx| cx.emit(e.clone())),
+            // Its state (reconnecting, the wait before the next dial) is
+            // drawn here.
+            cx.observe(&workspace, |_, _, cx| cx.notify()),
             cx.subscribe(&workspace, |v, _, e: &Event, cx| match e {
                 Event::Projects => v.reload_all(cx),
                 Event::Heard { root, event, .. } if event == "git.changed" => {
@@ -623,7 +626,14 @@ impl Render for CommitView {
         let mut any = false;
         match &state {
             State::Connecting => list = list.child(muted("Connecting…", &p)),
-            State::Reconnecting(why) => list = list.child(muted(State::reconnecting(why), &p)),
+            State::Reconnecting(_) => {
+                list = list.child(crate::workspace::reconnecting(
+                    &self.workspace,
+                    "commit-retry",
+                    &p,
+                    cx,
+                ))
+            }
             State::Failed(e) => {
                 list = list.child(muted(format!("Could not reach the Code service: {e}"), &p))
             }

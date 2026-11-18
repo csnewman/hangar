@@ -4,7 +4,10 @@
 //! workspace and the machine's files. The tool windows showing projects
 //! share one, and hear the service's events through it.
 
-use gpui::{Context, Entity, EventEmitter, WeakEntity};
+use std::time::Duration;
+
+use gpui::prelude::*;
+use gpui::{App, Context, Entity, EventEmitter, WeakEntity, px};
 use serde_json::{Value, json};
 
 use crate::code::{Code, Notice};
@@ -57,12 +60,44 @@ impl EventEmitter<Event> for Workspace {}
 /// root.
 pub const PRIMARY: &str = "";
 
-impl State {
-    /// What a view says in place of the projects while the service is
-    /// out of reach.
-    pub fn reconnecting(why: &str) -> String {
-        format!("Reconnecting to the Code service ({why})…")
-    }
+/// What a view says in place of what it shows while the Code service is
+/// out of reach: why, when it is tried again, and Retry Now while it
+/// waits. id names the button, unique in the window.
+pub fn reconnecting(
+    workspace: &Entity<Workspace>,
+    id: &'static str,
+    p: &crate::palette::Palette,
+    cx: &App,
+) -> gpui::AnyElement {
+    let w = workspace.read(cx);
+    let why = match &w.state {
+        State::Reconnecting(why) => why.as_str(),
+        _ => "",
+    };
+    let text = match w.retry_in {
+        Some(d) => format!(
+            "Reconnecting to the Code service ({why}). Retrying in {}s.",
+            d.as_secs().max(1)
+        ),
+        None => format!("Reconnecting to the Code service ({why})…"),
+    };
+    let ws = workspace.clone();
+    gpui_component::v_flex()
+        .items_start()
+        .gap(px(6.))
+        .px(px(8.))
+        .py(px(4.))
+        .text_size(px(11.5))
+        .text_color(p.muted)
+        .child(text)
+        .when(w.retry_in.is_some(), |d| {
+            d.child(
+                crate::ui::button(id, "Retry Now", p)
+                    .debug_selector(move || id.into())
+                    .on_click(move |_, _, cx| ws.read(cx).retry()),
+            )
+        })
+        .into_any_element()
 }
 
 pub struct Workspace {
@@ -77,6 +112,9 @@ pub struct Workspace {
     projects: Vec<Folder>,
     /// The connections lost and not yet made again, by key.
     lost: std::collections::HashSet<String>,
+    /// While Reconnecting, how long until the editor folder's connection
+    /// is dialled again; none while it dials.
+    retry_in: Option<Duration>,
     notices: async_channel::Sender<(String, Notice)>,
 }
 
@@ -108,6 +146,7 @@ impl Workspace {
             settings: String::new(),
             projects: vec![],
             lost: Default::default(),
+            retry_in: None,
             notices: tx,
         };
         w.primary = w.connect(PRIMARY, editor, cx);
@@ -128,6 +167,18 @@ impl Workspace {
 
     pub fn state(&self) -> &State {
         &self.state
+    }
+
+    /// Dials every lost connection again now, rather than when its wait
+    /// ends.
+    pub fn retry(&self) {
+        for code in self
+            .primary
+            .iter()
+            .chain(self.projects.iter().map(|f| &f.code))
+        {
+            code.retry();
+        }
     }
 
     pub fn projects(&self) -> &[Folder] {
@@ -213,9 +264,14 @@ impl Workspace {
                 cx.emit(Event::Projects);
                 cx.notify();
             }
-            Notice::Lost { why, .. } => {
+            Notice::Redialling if key == PRIMARY => {
+                self.retry_in = None;
+                cx.notify();
+            }
+            Notice::Lost { why, retry_in } => {
                 if key == PRIMARY {
                     self.state = State::Reconnecting(why);
+                    self.retry_in = Some(retry_in);
                     cx.emit(Event::Projects);
                     cx.notify();
                 }

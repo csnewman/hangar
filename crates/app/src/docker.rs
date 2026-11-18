@@ -446,6 +446,9 @@ const TICK: Duration = Duration::from_secs(30);
 
 impl DockerView {
     pub fn new(workspace: Entity<Workspace>, cx: &mut Context<Self>) -> Self {
+        // Its state (reconnecting, the wait before the next dial) is drawn
+        // here.
+        cx.observe(&workspace, |_, _, cx| cx.notify()).detach();
         let subs = vec![cx.subscribe(&workspace, |v, _, e: &Event, cx| match e {
             Event::Projects => v.load(cx),
             Event::Heard { root, event, .. } if root == PRIMARY && event == "docker.changed" => {
@@ -804,7 +807,9 @@ impl DockerView {
         let Some(o) = &self.overview else {
             let text = match &state {
                 State::Failed(e) => format!("Could not reach the Code service: {e}"),
-                State::Reconnecting(why) => State::reconnecting(why),
+                State::Reconnecting(_) => {
+                    return crate::workspace::reconnecting(&self.workspace, "docker-retry", p, cx);
+                }
                 _ => match &self.error {
                     Some(e) => e.clone(),
                     None => "Loading…".into(),

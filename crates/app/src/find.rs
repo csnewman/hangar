@@ -496,6 +496,9 @@ impl FindView {
                 InputEvent::PressEnter { .. } => v.search(cx),
                 _ => {}
             }),
+            // Its state (reconnecting, the wait before the next dial) is
+            // drawn here.
+            cx.observe(&workspace, |_, _, cx| cx.notify()),
             cx.subscribe(&workspace, |v, _, e: &Event, cx| {
                 if e == &Event::Projects && v.cur.title.is_none() && !v.cur.pinned {
                     v.search(cx);
@@ -1289,7 +1292,9 @@ impl Render for FindView {
         let state = self.workspace.read(cx).state().clone();
         let body: gpui::AnyElement = match state {
             State::Connecting => note("Connecting…", &p),
-            State::Reconnecting(why) => note(State::reconnecting(&why), &p),
+            State::Reconnecting(_) => {
+                crate::workspace::reconnecting(&self.workspace, "find-retry", &p, cx)
+            }
             State::Failed(e) => note(format!("Could not reach the Code service: {e}"), &p),
             State::Ready if !self.cur.errors.is_empty() && self.cur.rows.is_empty() => {
                 note(self.cur.errors.join("\n"), &p)

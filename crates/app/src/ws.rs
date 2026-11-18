@@ -47,7 +47,7 @@ pub fn lost(e: &tungstenite::Error) -> String {
             K::ConnectionAborted | K::BrokenPipe | K::UnexpectedEof => {
                 "the connection was closed".into()
             }
-            _ => e.to_string(),
+            _ => plain(e),
         },
         tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed => {
             "the server closed the connection".into()
@@ -184,9 +184,24 @@ fn dial(host: &str, port: u16) -> Result<TcpStream, ConnectError> {
         Some(e) if e.kind() == std::io::ErrorKind::TimedOut => {
             format!("no response from {host}:{port}")
         }
-        Some(e) => e.to_string(),
+        Some(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+            format!("{host}:{port} refused the connection")
+        }
+        Some(e) => plain(&e),
         None => format!("{host} has no address"),
     }))
+}
+
+/// An I/O error's message without the system's error number, lower-cased
+/// to sit inside a sentence: "network is unreachable".
+fn plain(e: &std::io::Error) -> String {
+    let s = e.to_string();
+    let s = s.split(" (os error").next().unwrap_or(&s);
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_lowercase().chain(c).collect(),
+        None => String::new(),
+    }
 }
 
 /// How long a connection is quiet before it is pinged, and how long a ping

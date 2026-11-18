@@ -105,6 +105,18 @@ impl Places {
         self.connect(self.places.len() - 1);
     }
 
+    /// Makes a place's connection again now, rather than when the wait
+    /// after its last failure ends.
+    pub fn retry(&mut self, place: &str, cx: &mut Context<Self>) {
+        if !self.connects {
+            return;
+        }
+        if let Some(i) = self.places.iter().position(|(c, _)| c.id == place) {
+            self.connect(i);
+            cx.notify();
+        }
+    }
+
     /// Makes every place's connection again now, as after the machine
     /// slept: one waiting out a dead stream or a retry would be stale
     /// until its timer ran out.

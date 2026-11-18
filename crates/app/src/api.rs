@@ -169,6 +169,7 @@ impl Client {
             }
             let builder = reqwest::Client::builder()
                 .tls_backend_preconfigured(tls_for(url)?)
+                .connect_timeout(crate::ws::DIAL_WITHIN)
                 .default_headers(headers)
                 .user_agent(concat!("hangar-app/", env!("CARGO_PKG_VERSION")));
             let builder = if calls {

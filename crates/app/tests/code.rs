@@ -146,7 +146,58 @@ fn a_lost_connection_is_made_again() {
         futures_block(code.call("fs.list", json!({}))).is_err(),
         "a call while lost fails"
     );
+    assert_eq!(next(), Notice::Redialling);
     assert!(matches!(next(), Notice::Ready(h) if h["n"] == 1));
+}
+
+/// Retry ends the wait before dialling again: the waits grow while the
+/// service stays out of reach, and the one after Retry is skipped.
+#[test]
+fn retry_dials_again_at_once() {
+    use std::io::{Read, Write};
+    let ln = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", ln.local_addr().unwrap());
+    thread::spawn(move || {
+        for tcp in ln.incoming() {
+            let mut tcp = tcp.unwrap();
+            let mut req = Vec::new();
+            let mut buf = [0; 1024];
+            while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = tcp.read(&mut buf).unwrap();
+                if n == 0 {
+                    break;
+                }
+                req.extend_from_slice(&buf[..n]);
+            }
+            let body = r#"{"error":"the environment is not running"}"#;
+            let resp = format!(
+                "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            tcp.write_all(resp.as_bytes()).unwrap();
+            thread::sleep(Duration::from_millis(100));
+        }
+    });
+    let (tx, rx) = mpsc::channel();
+    let code = Code::connect(&Client::new(&url, "hgr_t"), "env1", "/r", move |n| {
+        tx.send(n).is_ok()
+    });
+    let next = || rx.recv_timeout(Duration::from_secs(10)).expect("a notice");
+    loop {
+        match next() {
+            Notice::Lost { retry_in, .. } if retry_in >= Duration::from_secs(4) => break,
+            Notice::Lost { .. } | Notice::Redialling => {}
+            n => panic!("{n:?}"),
+        }
+    }
+    let asked = std::time::Instant::now();
+    code.retry();
+    assert_eq!(next(), Notice::Redialling);
+    assert!(asked.elapsed() < Duration::from_secs(1));
+    assert!(
+        matches!(next(), Notice::Lost { retry_in, .. } if retry_in < Duration::from_secs(1)),
+        "after Retry the waits start short again"
+    );
 }
 
 /// A server that refuses the token is not dialled again.

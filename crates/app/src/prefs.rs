@@ -1298,6 +1298,21 @@ impl SettingsView {
                                     ))
                                 }
                             })
+                            .when(matches!(state, Connection::Offline { .. }), |d| {
+                                let id = id.clone();
+                                d.child(
+                                    button(
+                                        SharedString::from(format!("place-retry-{id}")),
+                                        "Retry Now",
+                                        p,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.places.update(cx, |pl, cx| pl.retry(&id, cx))
+                                        },
+                                    )),
+                                )
+                            })
                             .child(div().flex_1())
                             .child(if row.removed {
                                 h_flex()

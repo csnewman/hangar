@@ -637,6 +637,9 @@ pub struct DocEditor {
     pushing: bool,
     writable: bool,
     state: State,
+    /// While Reconnecting, how long until the connection is dialled again;
+    /// none while it dials.
+    retry_in: Option<Duration>,
     /// Where to put the cursor once the file is open: 0-based line and
     /// UTF-16 column.
     go_to: Option<(u32, u32)>,
@@ -787,6 +790,7 @@ impl DocEditor {
             pushing: false,
             writable: false,
             state: State::Opening,
+            retry_in: None,
             go_to: None,
             typos: Vec::new(),
             spelt: false,
@@ -1086,7 +1090,12 @@ impl DocEditor {
                 })
                 .detach();
             }
-            Notice::Lost { why, .. } if self.state != State::Deleted => {
+            Notice::Redialling => {
+                self.retry_in = None;
+                cx.notify();
+            }
+            Notice::Lost { why, retry_in } if self.state != State::Deleted => {
+                self.retry_in = Some(retry_in);
                 if self.sync.is_some() {
                     self.state = State::Reconnecting(why);
                     self.doc = None;
@@ -2968,13 +2977,20 @@ impl Render for DocEditor {
                 self.go_to(line, column, window, cx);
             }
         }
+        let waiting = matches!(self.state, State::Reconnecting(_)) && self.retry_in.is_some();
         let notice = match &self.state {
             State::Opening => Some("Opening…".to_string()),
             State::Deleted => Some("The file has been deleted.".to_string()),
             State::Failed(e) => Some(format!("Not connected: {e}")),
-            State::Reconnecting(why) => Some(format!(
-                "Reconnecting ({why})… Edits are kept and saved when the connection is restored."
-            )),
+            State::Reconnecting(why) => Some(match self.retry_in {
+                Some(d) => format!(
+                    "Reconnecting ({why}). Retrying in {}s. Edits are kept and saved when the connection is restored.",
+                    d.as_secs().max(1)
+                ),
+                None => format!(
+                    "Reconnecting ({why})… Edits are kept and saved when the connection is restored."
+                ),
+            }),
             State::Open if self.save_error.is_some() => {
                 self.save_error.as_ref().map(|e| format!("Not saved: {e}"))
             }
@@ -3184,18 +3200,42 @@ impl Render for DocEditor {
                 )
             })
             .when_some(notice, |d, n| {
+                // Held inside the editor's width, where a long notice wraps.
                 d.child(
                     div()
                         .absolute()
                         .top(px(6.))
+                        .left(px(14.))
                         .right(px(14.))
-                        .px(px(8.))
-                        .py(px(2.))
-                        .rounded(px(5.))
-                        .bg(p.surface_2)
-                        .text_size(px(11.))
-                        .text_color(p.muted)
-                        .child(n),
+                        .flex()
+                        .justify_end()
+                        .child(
+                            div()
+                                .min_w_0()
+                                .px(px(8.))
+                                .py(px(2.))
+                                .rounded(px(5.))
+                                .bg(p.surface_2)
+                                .text_size(px(11.))
+                                .text_color(p.muted)
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(div().min_w_0().child(n))
+                                .when(waiting, |d| {
+                                    d.child(
+                                        div()
+                                            .id("doc-retry")
+                                            .debug_selector(|| "doc-retry".into())
+                                            .flex_none()
+                                            .text_color(p.accent)
+                                            .cursor_pointer()
+                                            .hover(|s| s.underline())
+                                            .child("Retry Now")
+                                            .on_click(cx.listener(|d, _, _, _| d.code.retry())),
+                                    )
+                                }),
+                        ),
                 )
             })
     }
