@@ -3,7 +3,8 @@
 //! reach the other and kept open while both are up. Over it each side
 //! sends the person's records (`linksync`) and their copies' files
 //! (`linkfiles`) as soon as they change, and both compare them in full on
-//! connecting and every hour. Every message is `Sealed`: signed by its
+//! connecting and every hour; and, at link level 2, the manifests and
+//! blobs their repositories lack (`linkimages`). Every message is `Sealed`: signed by its
 //! sender and sealed to its recipient; a file goes in binary messages of
 //! a piece each, sent by a task of the connection's own, so a large one
 //! holds up nothing else.
@@ -12,7 +13,7 @@
 //! there is none, backing off while it cannot. Two dialled at once settle
 //! on the one dialled by the place of lower ID.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -29,6 +30,7 @@ use crate::link::{LEVELS, Place, Refused, Sealed};
 use crate::linkfiles::{
     Body, Carry, FilePiece, FileVersions, FileWant, Job, LEVEL1_MAX_FILE, MAX_FILE, PIECE,
 };
+use crate::linkimages::{ImagePiece, Pieces, Wants};
 use crate::linksync::{Exchange, Here, Records, Versions};
 use crate::store::Error as StoreError;
 use crate::store::rows::Link;
@@ -68,6 +70,9 @@ enum Cmd {
     OfferFiles,
     /// Send these files.
     Files(Vec<Job>),
+    /// Bring the person's pending repositories on, asking for what they
+    /// lack.
+    Images,
     Close,
 }
 
@@ -160,6 +165,16 @@ impl Conns {
         for ((u, other), l) in self.live.lock().unwrap().iter() {
             if *u == user && Some(*other) != except {
                 let _ = l.tx.send(Cmd::Files(jobs.clone()));
+            }
+        }
+    }
+
+    /// Has each of a person's connections bring their pending
+    /// repositories on.
+    pub fn images(&self, user: Uuid) {
+        for ((u, _), l) in self.live.lock().unwrap().iter() {
+            if *u == user {
+                let _ = l.tx.send(Cmd::Images);
             }
         }
     }
@@ -385,6 +400,7 @@ fn here<'a>(app: &'a App, place: &Place) -> Here<'a> {
         place: place.id,
         sealer: app.cfg.sealer.as_deref(),
         root: &app.root,
+        images: app.cfg.registry && app.blobs.is_some(),
     }
 }
 
@@ -742,6 +758,7 @@ async fn serve(
     record(app, user, other, dialled, exchanged).await;
     let mut recorded = Instant::now();
     let max = max_file(wire.level);
+    let asked = tokio::sync::Mutex::new(HashSet::new());
     let out = outbox(
         app.clone(),
         place.clone(),
@@ -759,6 +776,8 @@ async fn serve(
         wire: &wire,
         out: &out,
         max,
+        level: wire.level,
+        asked: &asked,
     };
     if let Err(e) = offer(&c).await {
         eprintln!("hangar-server: sending to a linked place: {e}");
@@ -767,6 +786,9 @@ async fn serve(
     // it wants and has newer, which covers both ways.
     if dialled && let Err(e) = offer_files(&c).await {
         eprintln!("hangar-server: sending files' versions to a linked place: {e}");
+    }
+    if let Err(e) = images(&c).await {
+        eprintln!("hangar-server: asking a linked place for images: {e}");
     }
     let mut ping = tokio::time::interval_at(Instant::now() + PING, PING);
     let mut full = tokio::time::interval_at(Instant::now() + FULL, FULL);
@@ -782,6 +804,8 @@ async fn serve(
             wire: &wire,
             out: &out,
             max,
+            level: wire.level,
+            asked: &asked,
         };
         tokio::select! {
             f = rx.recv() => match f {
@@ -799,7 +823,7 @@ async fn serve(
                 }
                 Some(Frame::Binary(b)) => {
                     heard = Instant::now();
-                    if let Err(e) = piece(&c, &b).await {
+                    if let Err(e) = binary(&c, &b).await {
                         eprintln!("hangar-server: a linked place's file: {e}");
                     }
                 }
@@ -822,6 +846,11 @@ async fn serve(
                         let _ = out.send(j);
                     }
                 }
+                Some(Cmd::Images) => {
+                    if let Err(e) = images(&c).await {
+                        eprintln!("hangar-server: asking a linked place for images: {e}");
+                    }
+                }
                 Some(Cmd::Close) | None => break,
             },
             _ = ping.tick() => {
@@ -839,6 +868,11 @@ async fn serve(
                 }
                 if dialled && let Err(e) = offer_files(&c).await {
                     eprintln!("hangar-server: sending files' versions to a linked place: {e}");
+                }
+                // What the other place lacked an hour ago it may have since.
+                asked.lock().await.clear();
+                if let Err(e) = images(&c).await {
+                    eprintln!("hangar-server: asking a linked place for images: {e}");
                 }
             }
         }
@@ -858,15 +892,27 @@ struct Conn<'a> {
     out: &'a Outbox,
     /// The largest file the other place takes.
     max: u64,
+    /// The link level both places speak.
+    level: u32,
+    /// The manifests and blobs asked of the other place, by digest.
+    asked: &'a tokio::sync::Mutex<HashSet<String>>,
 }
 
 /// The files a connection is to send, each with when it was asked for.
-struct Outbox(mpsc::UnboundedSender<(Job, Instant)>);
+struct Outbox {
+    files: mpsc::UnboundedSender<(Job, Instant)>,
+    images: mpsc::UnboundedSender<crate::linkimages::Job>,
+}
 
 impl Outbox {
     /// Asks for a file to be sent; false once the connection has ended.
     fn send(&self, j: Job) -> bool {
-        self.0.send((j, Instant::now())).is_ok()
+        self.files.send((j, Instant::now())).is_ok()
+    }
+
+    /// Asks for a repository's manifest or blob to be sent.
+    fn image(&self, j: crate::linkimages::Job) -> bool {
+        self.images.send(j).is_ok()
     }
 }
 
@@ -882,8 +928,16 @@ fn outbox(
     max: u64,
 ) -> Outbox {
     let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<(Job, Instant)>();
+    let (images_tx, mut images) = mpsc::unbounded_channel::<crate::linkimages::Job>();
     tokio::spawn(async move {
         let mut queue: VecDeque<(Job, Instant)> = VecDeque::new();
+        // Manifests and blobs go after files, which people work with.
+        let mut image_queue: VecDeque<crate::linkimages::Job> = VecDeque::new();
+        let add_image = |q: &mut VecDeque<crate::linkimages::Job>, j: crate::linkimages::Job| {
+            if !q.iter().any(|x| x.repo == j.repo && x.digest == j.digest) {
+                q.push_back(j);
+            }
+        };
         let mut pacer = Pacer::default();
         // The files sent whole: the version of each, and when its last
         // piece went. Asked for again before then (on taking its version,
@@ -902,16 +956,35 @@ fn outbox(
             None => queue.push_back((j, asked)),
         };
         loop {
-            if queue.is_empty() {
-                match jobs.recv().await {
-                    Some(j) => add(&mut queue, j),
-                    None => return,
+            if queue.is_empty() && image_queue.is_empty() {
+                tokio::select! {
+                    j = jobs.recv() => match j {
+                        Some(j) => add(&mut queue, j),
+                        None => return,
+                    },
+                    j = images.recv() => match j {
+                        Some(j) => add_image(&mut image_queue, j),
+                        None => return,
+                    },
                 }
             }
             while let Ok(j) = jobs.try_recv() {
                 add(&mut queue, j);
             }
+            while let Ok(j) = images.try_recv() {
+                add_image(&mut image_queue, j);
+            }
             let Some((job, asked)) = queue.pop_front() else {
+                if let Some(job) = image_queue.pop_front() {
+                    pacer.read(&app, link.user_id).await;
+                    match send_image(&app, &place, person, &link, &tx, &mut pacer, &job).await {
+                        Ok(()) => {}
+                        Err(e) if e.is_empty() => return,
+                        Err(e) => {
+                            eprintln!("hangar-server: sending an image to a linked place: {e}")
+                        }
+                    }
+                }
                 continue;
             };
             pacer.read(&app, link.user_id).await;
@@ -947,7 +1020,43 @@ fn outbox(
             }
         }
     });
-    Outbox(jobs_tx)
+    Outbox {
+        files: jobs_tx,
+        images: images_tx,
+    }
+}
+
+/// Sends a repository's manifest or blob in pieces, each read as its turn
+/// comes; an empty error when the connection has ended.
+async fn send_image(
+    app: &App,
+    place: &Place,
+    person: Uuid,
+    link: &Link,
+    tx: &mpsc::Sender<Frame>,
+    pacer: &mut Pacer,
+    job: &crate::linkimages::Job,
+) -> Result<(), String> {
+    let Some((piece, source)) = crate::linkimages::read(app, link.user_id, job).await? else {
+        return Ok(());
+    };
+    let mut pieces = Pieces::new(piece, source, PIECE);
+    while let Some((piece, bytes)) = pieces.next().await? {
+        let frame = Sealed::make_binary(
+            place,
+            "image",
+            link.place_id,
+            &link.public_key,
+            person,
+            &piece,
+            &bytes,
+        )?;
+        pacer.wait(frame.len()).await;
+        if tx.send(Frame::Binary(frame)).await.is_err() {
+            return Err(String::new());
+        }
+    }
+    Ok(())
 }
 
 /// How often a connection's file sender reads the person's bandwidth
@@ -1044,14 +1153,52 @@ async fn send_file(
 /// Takes a piece of a file the other place sent: written to
 /// `.links/incoming/` as it comes, and once the file is whole, taken.
 /// What is taken goes on to the person's other places.
-async fn piece(c: &Conn<'_>, frame: &[u8]) -> Result<(), String> {
+async fn binary(c: &Conn<'_>, frame: &[u8]) -> Result<(), String> {
     let (msg, body) = Sealed::parse_binary(frame).ok_or("a message that cannot be read")?;
     if msg.from != c.link.place_id || msg.person != c.person {
         return Err("a message from another place, or for another person".into());
     }
-    let (p, bytes): (FilePiece, Vec<u8>) = msg
-        .read_binary(body, c.place, "file", &c.link.public_key)
-        .map_err(|r| format!("it could not be read: {r:?}"))?;
+    let unread = |r| format!("it could not be read: {r:?}");
+    match msg.kind.as_str() {
+        "file" => {
+            let (p, bytes): (FilePiece, Vec<u8>) = msg
+                .read_binary(body, c.place, "file", &c.link.public_key)
+                .map_err(unread)?;
+            piece(c, p, bytes).await
+        }
+        "image" if c.level >= 2 => {
+            let (p, bytes): (ImagePiece, Vec<u8>) = msg
+                .read_binary(body, c.place, "image", &c.link.public_key)
+                .map_err(unread)?;
+            let user = c.link.user_id;
+            if crate::linkimages::receive(c.app, user, c.link.place_id, p, &bytes).await? {
+                images(c).await?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Brings the person's pending repositories as far as what is here lets,
+/// and asks the other place for what they lack, at link level 2.
+async fn images(c: &Conn<'_>) -> Result<(), String> {
+    if c.level < 2 || !c.here.images {
+        return Ok(());
+    }
+    let mut asked = c.asked.lock().await;
+    let wants =
+        crate::linkimages::reconcile(c.app, c.link.user_id, c.link.place_id, &mut asked).await?;
+    drop(asked);
+    if !wants.is_empty() {
+        let msg = sealed(c.place, "image_want", c.person, c.link, &Wants { wants })?;
+        c.wire.send_sealed(&msg).await;
+    }
+    Ok(())
+}
+
+/// Takes a piece of a file the other place sent.
+async fn piece(c: &Conn<'_>, p: FilePiece, bytes: Vec<u8>) -> Result<(), String> {
     let (app, user, from) = (c.app, c.link.user_id, c.link.place_id);
     if !p.content {
         return taken(c, &p, None).await;
@@ -1168,6 +1315,10 @@ async fn offer(c: &Conn<'_>) -> Result<(), String> {
     if changed {
         c.app.link_conns.offer(user, Some(c.link.place_id));
     }
+    let versions = versions
+        .into_iter()
+        .filter(|v| crate::linksync::for_level(&v.kind, c.level))
+        .collect();
     let msg = sealed(
         c.place,
         "versions",
@@ -1198,8 +1349,11 @@ async fn answer(c: &Conn<'_>, text: &str) -> Result<bool, String> {
                 let mut tx = app.store.begin().await?;
                 tx.lock_link_records(user).await?;
                 let changed = crate::linksync::scan(&mut tx, here, user).await?;
-                let ex = crate::linksync::exchange(&mut tx, here, user, &theirs.versions).await?;
+                let mut ex =
+                    crate::linksync::exchange(&mut tx, here, user, &theirs.versions).await?;
                 tx.commit().await?;
+                ex.records
+                    .retain(|r| crate::linksync::for_level(&r.version.kind, c.level));
                 Ok::<_, StoreError>((changed, ex))
             }
             .await
@@ -1218,16 +1372,19 @@ async fn answer(c: &Conn<'_>, text: &str) -> Result<bool, String> {
                 let mut tx = app.store.begin().await?;
                 tx.lock_link_records(user).await?;
                 let taken = crate::linksync::accept(&mut tx, here, user, &ex.records).await?;
-                let wanted = crate::linksync::records(&mut tx, here, user, &ex.want).await?;
+                let mut wanted = crate::linksync::records(&mut tx, here, user, &ex.want).await?;
                 tx.commit().await?;
+                wanted.retain(|r| crate::linksync::for_level(&r.version.kind, c.level));
                 Ok::<_, StoreError>((taken, wanted))
             }
             .await
             .map_err(|e| e.to_string())?;
             if taken > 0 {
                 app.link_conns.offer(user, Some(c.link.place_id));
-                // A copy or pack taken may hold files to compare.
+                // A copy or pack taken may hold files to compare, and a
+                // repository manifests and blobs to ask for.
                 app.link_conns.offer_files(user);
+                app.link_conns.images(user);
             }
             if !wanted.is_empty() {
                 let msg = sealed(
@@ -1255,6 +1412,7 @@ async fn answer(c: &Conn<'_>, text: &str) -> Result<bool, String> {
             if taken > 0 {
                 app.link_conns.offer(user, Some(c.link.place_id));
                 app.link_conns.offer_files(user);
+                app.link_conns.images(user);
             }
             Ok(true)
         }
@@ -1287,6 +1445,16 @@ async fn answer(c: &Conn<'_>, text: &str) -> Result<bool, String> {
                     (None, None) => Carry::Whole,
                 };
                 let _ = c.out.send(Job { copy, path, send });
+            }
+            Ok(false)
+        }
+        "image_want" if c.level >= 2 => {
+            let w: Wants = msg.read(c.place, "image_want", key).map_err(unread)?;
+            let jobs = crate::linkimages::jobs(app, user, &w.wants)
+                .await
+                .map_err(|e| e.to_string())?;
+            for j in jobs {
+                let _ = c.out.image(j);
             }
             Ok(false)
         }

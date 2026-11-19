@@ -722,9 +722,16 @@ impl S3 {
         if !resp.status().is_success() {
             return Err(Error(format!("looking at {key}: {}", resp.status())));
         }
+        // A HEAD's own body is empty, so its size is its header's, not
+        // what reqwest's content_length says of the body.
+        let size = resp
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok()?.parse().ok())
+            .ok_or_else(|| Error(format!("looking at {key}: no Content-Length")))?;
         Ok(Some(Object {
             key: key.to_string(),
-            size: resp.content_length().unwrap_or(0),
+            size,
         }))
     }
 

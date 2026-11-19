@@ -14,6 +14,7 @@ mod keys;
 mod link;
 mod linkconn;
 mod linkfiles;
+mod linkimages;
 mod linksync;
 mod listen;
 mod maintain;

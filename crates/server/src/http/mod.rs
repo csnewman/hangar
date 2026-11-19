@@ -53,6 +53,8 @@ pub struct App {
     /// The linked copies changed here, and the people whose files are
     /// being linked.
     pub link_files: Arc<crate::linkfiles::Files>,
+    /// The manifests and blobs of linked people's repositories coming in.
+    pub link_images: Arc<crate::linkimages::Images>,
 }
 
 impl App {
@@ -71,6 +73,7 @@ impl App {
             links_wake: Arc::default(),
             link_conns: Arc::default(),
             link_files: Arc::default(),
+            link_images: Arc::default(),
             store,
             cfg,
             rules: access::Rules::from_specs(),

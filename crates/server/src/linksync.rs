@@ -1,6 +1,7 @@
 //! A linked person's records, kept the same in every place they link
 //! (docs/places.md §4.3): their theme, sign-in keys, SSH keys, own packs
-//! and the shared copies they own of those and the profile. Each place holds them in its own tables as ever, and keeps
+//! and the shared copies they own of those and the profile, their
+//! templates and their own image repositories (`linkimages`). Each place holds them in its own tables as ever, and keeps
 //! beside them (`link_records`) a version of each: the time of its last
 //! change on the places' shared clock and the place that made it, which
 //! together say which of two versions is newer, and a digest of its
@@ -30,6 +31,8 @@ pub struct Here<'a> {
     pub place: Uuid,
     pub sealer: Option<&'a Sealer>,
     pub root: &'a Root,
+    /// Whether it holds image repositories: it runs a registry.
+    pub images: bool,
 }
 
 /// A record's version, as one place tells another.
@@ -80,26 +83,41 @@ const COPY: &str = "copy";
 const SENDING: &str = "sending";
 const DEFAULT: &str = "default";
 const TEMPLATE: &str = "template";
+const IMAGE: &str = crate::linkimages::KIND;
+const IMAGE_TAG: &str = crate::linkimages::TAG_KIND;
 
 /// The kinds of record this place holds: SSH keys only with a secret key
-/// to seal them.
+/// to seal them, and image repositories only with a registry.
 fn kinds(here: &Here) -> Vec<&'static str> {
     let mut k = vec![THEME, LOGIN_KEY, PACK, COPY, SENDING, DEFAULT, TEMPLATE];
     if here.sealer.is_some() {
         k.push(SSH_KEY);
     }
+    if here.images {
+        k.push(IMAGE);
+        k.push(IMAGE_TAG);
+    }
     k
 }
 
+/// Whether a place speaking link level takes records of kind: image
+/// repositories and tags come with their content, which only level 2
+/// carries.
+pub fn for_level(kind: &str, level: u32) -> bool {
+    !matches!(kind, IMAGE | IMAGE_TAG) || level >= 2
+}
+
 /// The order records are taken in: a pack before its copies, a copy
-/// before the default that names it, and packs before the templates that
-/// list them.
+/// before the default that names it, packs before the templates that
+/// list them, and a repository before its tags.
 fn rank(kind: &str) -> u8 {
     match kind {
         PACK => 1,
         COPY => 2,
         DEFAULT => 3,
         TEMPLATE => 4,
+        IMAGE => 5,
+        IMAGE_TAG => 6,
         _ => 0,
     }
 }
@@ -253,6 +271,11 @@ async fn snapshot(
                 "spec": spec,
             }),
         );
+    }
+    if here.images {
+        for (kind, id, body) in crate::linkimages::records(tx, here.root, user).await? {
+            out.insert((kind.into(), id), body);
+        }
     }
     for p in packs {
         if !own_pack(&p, user) {
@@ -998,6 +1021,7 @@ async fn apply(
                 }
             }
         }
+        IMAGE | IMAGE_TAG => crate::linkimages::apply(tx, here.root, user, kind, id, body).await,
         _ => Ok(false),
     }
 }

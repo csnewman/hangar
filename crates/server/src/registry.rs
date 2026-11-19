@@ -77,7 +77,7 @@ const FOREIGN: &[&str] = &[
     "application/vnd.docker.image.rootfs.foreign.diff.tar.gzip",
 ];
 
-const MAX_MANIFEST: usize = 4 << 20;
+pub(crate) const MAX_MANIFEST: usize = 4 << 20;
 
 /// Where workers reach the registry, beneath the worker API.
 pub const WORKER_PATH: &str = "/api/worker/v1/registry";
@@ -110,10 +110,10 @@ impl Caller {
 }
 
 /// A refusal, as the distribution API words one.
-struct Refused {
+pub(crate) struct Refused {
     status: StatusCode,
     code: &'static str,
-    message: String,
+    pub(crate) message: String,
 }
 
 fn refused(status: StatusCode, code: &'static str, message: impl Into<String>) -> Refused {
@@ -205,11 +205,11 @@ fn component(s: &str) -> bool {
 }
 
 /// A repository's name: two components or more.
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     name.len() <= 255 && name.split('/').count() >= 2 && name.split('/').all(component)
 }
 
-fn valid_tag(t: &str) -> bool {
+pub(crate) fn valid_tag(t: &str) -> bool {
     let b = t.as_bytes();
     !b.is_empty()
         && b.len() <= 128
@@ -221,13 +221,13 @@ fn valid_tag(t: &str) -> bool {
 /// A digest and its algorithm, when it is one of those the registry
 /// knows.
 #[derive(Debug, Clone, PartialEq)]
-struct Digest {
-    algorithm: &'static str,
-    hex: String,
+pub(crate) struct Digest {
+    pub(crate) algorithm: &'static str,
+    pub(crate) hex: String,
 }
 
 impl Digest {
-    fn parse(s: &str) -> Option<Digest> {
+    pub(crate) fn parse(s: &str) -> Option<Digest> {
         let (alg, hex) = s.split_once(':')?;
         let (algorithm, len) = match alg {
             "sha256" => ("sha256", 64),
@@ -251,7 +251,7 @@ impl Digest {
         h.finish()
     }
 
-    fn key(&self) -> String {
+    pub(crate) fn key(&self) -> String {
         format!("registry/blobs/{}/{}", self.algorithm, self.hex)
     }
 }
@@ -262,14 +262,14 @@ impl std::fmt::Display for Digest {
     }
 }
 
-enum Hasher {
+pub(crate) enum Hasher {
     Sha256(sha2::Sha256),
     Sha384(sha2::Sha384),
     Sha512(sha2::Sha512),
 }
 
 impl Hasher {
-    fn new(algorithm: &str) -> Hasher {
+    pub(crate) fn new(algorithm: &str) -> Hasher {
         match algorithm {
             "sha384" => Hasher::Sha384(sha2::Sha384::new()),
             "sha512" => Hasher::Sha512(sha2::Sha512::new()),
@@ -277,7 +277,7 @@ impl Hasher {
         }
     }
 
-    fn update(&mut self, b: &[u8]) {
+    pub(crate) fn update(&mut self, b: &[u8]) {
         match self {
             Hasher::Sha256(h) => h.update(b),
             Hasher::Sha384(h) => h.update(b),
@@ -285,7 +285,7 @@ impl Hasher {
         }
     }
 
-    fn finish(self) -> Digest {
+    pub(crate) fn finish(self) -> Digest {
         let (algorithm, bytes) = match self {
             Hasher::Sha256(h) => ("sha256", h.finalize().to_vec()),
             Hasher::Sha384(h) => ("sha384", h.finalize().to_vec()),
@@ -1207,32 +1207,22 @@ fn invalid_manifest(why: impl Into<String>) -> Refused {
     refused(StatusCode::BAD_REQUEST, "MANIFEST_INVALID", why)
 }
 
-/// Keeps a manifest pushed, giving its digest and its subject.
-async fn put_manifest(
-    app: &Shared,
-    c: &Caller,
-    ip: &str,
-    a: &Access,
-    req: Request,
-    reference: &str,
-) -> Result<(Digest, Option<String>), Refused> {
-    let content_type = header_of(req.headers(), "content-type")
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let content = axum::body::to_bytes(req.into_body(), MAX_MANIFEST + 1)
-        .await
-        .map_err(|_| {
-            refused(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "SIZE_INVALID",
-                "the manifest is larger than 4 MiB",
-            )
-        })?
-        .to_vec();
-    let m: Value = serde_json::from_slice(&content)
+/// What a manifest is and names, as a push checks it: the blobs it holds
+/// (its config and layers, but foreign ones), the manifests an index
+/// holds, its subject, artifact type and annotations.
+pub(crate) struct Parsed {
+    pub(crate) media_type: String,
+    pub(crate) artifact_type: String,
+    pub(crate) blobs: Vec<String>,
+    pub(crate) manifests: Vec<String>,
+    pub(crate) subject: Option<String>,
+    pub(crate) annotations: Option<Value>,
+}
+
+/// Reads a manifest whose type is content_type, else its own mediaType.
+pub(crate) fn parse_manifest(content: &[u8], content_type: &str) -> Result<Parsed, Refused> {
+    let content_type = content_type.to_string();
+    let m: Value = serde_json::from_slice(content)
         .map_err(|e| invalid_manifest(format!("the manifest is not JSON: {e}")))?;
     let own_type = m.get("mediaType").and_then(Value::as_str).unwrap_or("");
     let mt = if content_type.is_empty() {
@@ -1245,27 +1235,6 @@ async fn put_manifest(
             "the manifest's mediaType is not its Content-Type",
         ));
     }
-    let (d, tag) = if let Some(want) = Digest::parse(reference) {
-        let d = Digest::of(want.algorithm, &content);
-        if d != want {
-            return Err(refused(
-                StatusCode::BAD_REQUEST,
-                "DIGEST_INVALID",
-                "the manifest's content does not match its digest",
-            ));
-        }
-        (d, None)
-    } else if valid_tag(reference) {
-        (Digest::of("sha256", &content), Some(reference.to_string()))
-    } else if reference.contains(':') {
-        return Err(refused(
-            StatusCode::BAD_REQUEST,
-            "DIGEST_INVALID",
-            "unsupported digest algorithm",
-        ));
-    } else {
-        return Err(invalid_manifest(format!("invalid tag {reference}")));
-    };
     let digest_of = |x: &Value| {
         x.get("digest")
             .and_then(Value::as_str)
@@ -1341,6 +1310,70 @@ async fn put_manifest(
         .get("annotations")
         .filter(|a| a.as_object().is_some_and(|o| !o.is_empty()))
         .cloned();
+    Ok(Parsed {
+        media_type: mt,
+        artifact_type,
+        blobs,
+        manifests,
+        subject,
+        annotations,
+    })
+}
+
+/// Keeps a manifest pushed, giving its digest and its subject.
+async fn put_manifest(
+    app: &Shared,
+    c: &Caller,
+    ip: &str,
+    a: &Access,
+    req: Request,
+    reference: &str,
+) -> Result<(Digest, Option<String>), Refused> {
+    let content_type = header_of(req.headers(), "content-type")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let content = axum::body::to_bytes(req.into_body(), MAX_MANIFEST + 1)
+        .await
+        .map_err(|_| {
+            refused(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "SIZE_INVALID",
+                "the manifest is larger than 4 MiB",
+            )
+        })?
+        .to_vec();
+    let Parsed {
+        media_type: mt,
+        artifact_type,
+        blobs,
+        manifests,
+        subject,
+        annotations,
+    } = parse_manifest(&content, &content_type)?;
+    let (d, tag) = if let Some(want) = Digest::parse(reference) {
+        let d = Digest::of(want.algorithm, &content);
+        if d != want {
+            return Err(refused(
+                StatusCode::BAD_REQUEST,
+                "DIGEST_INVALID",
+                "the manifest's content does not match its digest",
+            ));
+        }
+        (d, None)
+    } else if valid_tag(reference) {
+        (Digest::of("sha256", &content), Some(reference.to_string()))
+    } else if reference.contains(':') {
+        return Err(refused(
+            StatusCode::BAD_REQUEST,
+            "DIGEST_INVALID",
+            "unsupported digest algorithm",
+        ));
+    } else {
+        return Err(invalid_manifest(format!("invalid tag {reference}")));
+    };
     let mut tx = app.store.begin().await?;
     let (missing_blob, missing_manifest) = tx.missing(a.repo.id, &blobs, &manifests).await?;
     if let Some(b) = missing_blob {

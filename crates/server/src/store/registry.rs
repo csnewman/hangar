@@ -63,6 +63,7 @@ impl Tx {
 
     /// Makes a repository; false when one has its path already.
     pub async fn insert_image_repository(&mut self, r: &ImageRepository) -> Result<bool> {
+        self.signal(super::signals::Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => Ok(sqlx::query(
                 "INSERT INTO image_repositories (id, path, owner_id, team_id, visibility, description, created_at, updated_at)
@@ -111,6 +112,7 @@ impl Tx {
 
     /// Writes a repository's visibility, description and when it changed.
     pub async fn save_image_repository(&mut self, r: &ImageRepository) -> Result<()> {
+        self.signal(super::signals::Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => {
                 sqlx::query(
@@ -139,6 +141,7 @@ impl Tx {
     }
 
     pub async fn delete_image_repository(&mut self, id: Uuid) -> Result<()> {
+        self.signal(super::signals::Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => {
                 sqlx::query("DELETE FROM image_repositories WHERE id = $1")
@@ -585,6 +588,7 @@ impl Tx {
         digest: &str,
         now: DateTime<Utc>,
     ) -> Result<()> {
+        self.signal(super::signals::Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => {
                 sqlx::query(
@@ -639,6 +643,7 @@ impl Tx {
     }
 
     pub async fn delete_tag(&mut self, repo: Uuid, tag: &str) -> Result<bool> {
+        self.signal(super::signals::Signal::Records);
         match &mut self.inner {
             Backend::Pg(tx) => Ok(sqlx::query(
                 "DELETE FROM image_tags WHERE repository_id = $1 AND tag = $2",

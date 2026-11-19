@@ -19,7 +19,11 @@ struct Place {
 }
 
 async fn place() -> Option<Place> {
-    let server = Server::start()?;
+    place_with(&[]).await
+}
+
+async fn place_with(settings: &[(&str, String)]) -> Option<Place> {
+    let server = Server::start_with(settings)?;
     let admin = server.admin().await;
     let token = server.token(&admin, "links").await;
     let client = server.client(&token);
@@ -769,6 +773,174 @@ async fn a_file_that_stopped_coming_comes_on_from_where_it_stopped() {
         grew.get(),
         "what came before the stop was kept and added to"
     );
+}
+
+fn sha256(b: &[u8]) -> String {
+    use sha2::Digest;
+    let d = sha2::Sha256::digest(b);
+    format!(
+        "sha256:{}",
+        d.iter().map(|x| format!("{x:02x}")).collect::<String>()
+    )
+}
+
+/// A place's registry, as its admin signs in to it with the place's
+/// access token.
+struct Registry {
+    http: reqwest::Client,
+    base: String,
+    auth: String,
+}
+
+fn registry(p: &Place) -> Registry {
+    use base64::Engine;
+    Registry {
+        http: p.server.http_to(&["registry.hangar.localhost"]),
+        base: format!("http://registry.hangar.localhost:{}", p.server.port()),
+        auth: format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode(format!("admin:{}", p.token))
+        ),
+    }
+}
+
+/// Pushes an image of one layer to repo:tag, giving its manifest.
+async fn push_image(r: &Registry, repo: &str, tag: &str, layer: &[u8]) -> String {
+    let config = br#"{"architecture":"arm64","os":"linux"}"#.to_vec();
+    for blob in [&config[..], layer] {
+        let res = r
+            .http
+            .post(format!(
+                "{}/v2/{repo}/blobs/uploads/?digest={}",
+                r.base,
+                sha256(blob)
+            ))
+            .header("authorization", &r.auth)
+            .header("content-type", "application/octet-stream")
+            .body(blob.to_vec())
+            .send()
+            .await
+            .expect("uploading a blob");
+        assert_eq!(res.status().as_u16(), 201, "uploading a blob");
+    }
+    let manifest = json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": { "mediaType": "application/vnd.oci.image.config.v1+json", "digest": sha256(&config), "size": config.len() },
+        "layers": [{ "mediaType": "application/vnd.oci.image.layer.v1.tar", "digest": sha256(layer), "size": layer.len() }],
+    })
+    .to_string();
+    let res = r
+        .http
+        .put(format!("{}/v2/{repo}/manifests/{tag}", r.base))
+        .header("authorization", &r.auth)
+        .header("content-type", "application/vnd.oci.image.manifest.v1+json")
+        .body(manifest.clone())
+        .send()
+        .await
+        .expect("pushing a manifest");
+    assert_eq!(res.status().as_u16(), 201, "pushing a manifest");
+    manifest
+}
+
+/// What a registry answers for path below /v2/, if it answers 200.
+async fn pull_bytes(r: &Registry, path: &str) -> Option<Vec<u8>> {
+    let res = r
+        .http
+        .get(format!("{}/v2/{path}", r.base))
+        .header("authorization", &r.auth)
+        .header("accept", "application/vnd.oci.image.manifest.v1+json")
+        .send()
+        .await
+        .ok()?;
+    if res.status().as_u16() != 200 {
+        return None;
+    }
+    Some(res.bytes().await.ok()?.to_vec())
+}
+
+/// Whether a registry serves repo:tag as the manifest given, and the layer
+/// it names.
+async fn serves(r: &Registry, repo: &str, tag: &str, manifest: &str, layer: &[u8]) -> bool {
+    pull_bytes(r, &format!("{repo}/manifests/{tag}"))
+        .await
+        .as_deref()
+        == Some(manifest.as_bytes())
+        && pull_bytes(r, &format!("{repo}/blobs/{}", sha256(layer)))
+            .await
+            .as_deref()
+            == Some(layer)
+}
+
+/// A place with a blob store of its own, in a directory, as a place on
+/// one machine has.
+async fn place_with_blobs() -> Option<Place> {
+    let dir = std::env::temp_dir().join(format!(
+        "hangar-suite-blobs-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the time")
+            .as_nanos()
+    ));
+    place_with(&[("HANGAR_BLOB_URL", format!("file://{}", dir.display()))]).await
+}
+
+/// A person's own image repositories reach their linked place: a tag
+/// pushed in either place, with its manifest and the blobs it names, is
+/// pulled from the other, which has a blob store of its own; and a tag
+/// deleted in one goes from the other.
+#[tokio::test]
+async fn a_persons_images_reach_their_linked_place() {
+    let (Some(a), Some(b)) = (place_with_blobs().await, place_with_blobs().await) else {
+        return;
+    };
+    let (ra, rb) = (registry(&a), registry(&b));
+    let one = push_image(&ra, "admin/tool", "v1", b"the first layer").await;
+    link(&a, &b).await;
+    eventually("b to serve the image a pushed", || async {
+        serves(&rb, "admin/tool", "v1", &one, b"the first layer")
+            .await
+            .then_some(())
+    })
+    .await;
+
+    // A layer of several pieces.
+    let large = noise(3 << 20, 13);
+    let two = push_image(&ra, "admin/tool", "v2", &large).await;
+    let three = push_image(&rb, "admin/tool", "b1", b"a layer pushed to b").await;
+    eventually("b to serve a's second image", || async {
+        serves(&rb, "admin/tool", "v2", &two, &large)
+            .await
+            .then_some(())
+    })
+    .await;
+    eventually("a to serve the image b pushed", || async {
+        serves(&ra, "admin/tool", "b1", &three, b"a layer pushed to b")
+            .await
+            .then_some(())
+    })
+    .await;
+
+    let repo = a
+        .admin
+        .list_image_repositories()
+        .await
+        .expect("a's repositories")
+        .into_inner()
+        .into_iter()
+        .find(|r| r.path == "admin/tool")
+        .expect("a's repository");
+    a.admin
+        .delete_image_tag(&repo.id, "v1")
+        .await
+        .expect("deleting a tag");
+    eventually("the tag to go from b", || async {
+        pull_bytes(&rb, "admin/tool/manifests/v1")
+            .await
+            .is_none()
+            .then_some(())
+    })
+    .await;
 }
 
 /// The copy a person uses of a pack by default follows them: chosen in
