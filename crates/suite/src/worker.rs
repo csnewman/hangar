@@ -489,7 +489,9 @@ async fn processes(conn: DuplexStream) {
 /// Answers one connection to the guest's TCP ports as the agent does
 /// (crates/agent/src/guestport.rs): the port, two bytes big-endian, then a
 /// byte, 0 connected or 1 refused. A WEB_PORTS port answers each HTTP
-/// request with a page naming the port and the request's host and path.
+/// request with a page naming the port and the request's host and path;
+/// /slow/MS after that many milliseconds, and /big/BYTES with that many
+/// bytes instead.
 async fn guest_ports(mut conn: DuplexStream) {
     let mut port = [0u8; 2];
     if conn.read_exact(&mut port).await.is_err() {
@@ -520,6 +522,33 @@ async fn guest_ports(mut conn: DuplexStream) {
                 .or_else(|| l.strip_prefix("host: "))
         })
         .unwrap_or("");
+    if let Some(ms) = path
+        .strip_prefix("/slow/")
+        .and_then(|m| m.split(['/', '?']).next()?.parse::<u64>().ok())
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
+    if let Some(size) = path
+        .strip_prefix("/big/")
+        .and_then(|m| m.split(['/', '?']).next()?.parse::<usize>().ok())
+    {
+        let head = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: {size}\r\nconnection: close\r\n\r\n"
+        );
+        if conn.write_all(head.as_bytes()).await.is_err() {
+            return;
+        }
+        let chunk = vec![b'x'; 64 << 10];
+        let mut left = size;
+        while left > 0 {
+            let n = left.min(chunk.len());
+            if conn.write_all(&chunk[..n]).await.is_err() {
+                return;
+            }
+            left -= n;
+        }
+        return;
+    }
     let page = format!("guest port {port}, {host}, {path}");
     let response = format!(
         "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
