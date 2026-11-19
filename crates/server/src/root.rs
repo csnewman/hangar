@@ -139,6 +139,65 @@ impl Root {
         Ok(out)
     }
 
+    /// The regular file at rel, open for reading.
+    pub fn open_read(&self, rel: &str) -> io::Result<std::fs::File> {
+        self.open_file(rel, OFlags::RDONLY)
+    }
+
+    /// Makes a file at rel that is not there, open for reading and
+    /// writing, private to the server; the directories it is in are made
+    /// as needed.
+    pub fn create(&self, rel: &str) -> io::Result<std::fs::File> {
+        let (dir, leaf) = self.parent(rel, true)?;
+        let fd = rustix::fs::openat(
+            &dir,
+            leaf,
+            OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+        )?;
+        Ok(std::fs::File::from(fd))
+    }
+
+    /// Puts the file at from in rel's place, as rel replaces would: given
+    /// mode, owned by the environments' user, synced, then renamed over
+    /// rel, so a reader sees it whole. Both are beneath the root, so the
+    /// rename moves nothing.
+    pub fn install(&self, from: &str, rel: &str, mode: u32) -> io::Result<()> {
+        let f = self.open_file(from, OFlags::RDONLY)?;
+        rustix::fs::fchmod(&f, Mode::from_raw_mode(mode as _))?;
+        own(&f)?;
+        f.sync_all()?;
+        let (from_dir, from_leaf) = self.parent(from, false)?;
+        let (dir, leaf) = self.parent(rel, true)?;
+        Ok(rustix::fs::renameat(&from_dir, from_leaf, &dir, leaf)?)
+    }
+
+    /// Copies the regular file at from to rel, as replace writes, a
+    /// buffer at a time.
+    pub fn copy(&self, from: &str, rel: &str, mode: u32, staging: &str) -> io::Result<()> {
+        let mut src = self.open_file(from, OFlags::RDONLY)?;
+        let (dir, leaf) = self.parent(rel, true)?;
+        let fd = rustix::fs::openat(
+            &dir,
+            staging,
+            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::from_raw_mode(mode as _),
+        )?;
+        let written = (|| {
+            rustix::fs::fchmod(&fd, Mode::from_raw_mode(mode as _))?;
+            own(&fd)?;
+            let mut f = std::fs::File::from(fd);
+            io::copy(&mut src, &mut f)?;
+            f.sync_all()?;
+            rustix::fs::renameat(&dir, staging, &dir, leaf)?;
+            Ok::<_, io::Error>(())
+        })();
+        if written.is_err() {
+            let _ = rustix::fs::unlinkat(&dir, staging, AtFlags::empty());
+        }
+        written
+    }
+
     /// Writes data beside rel and renames it over rel, so a reader sees it
     /// whole, with mode, owned by the environments' user; the directories
     /// it is in are made as needed.

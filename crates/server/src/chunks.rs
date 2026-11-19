@@ -14,8 +14,13 @@
 //! near it alone, and the chunks after it are found again. Both places
 //! cut alike or the chunks do not match, which costs bytes, not
 //! correctness: what is rebuilt is checked against its SHA-256.
+//!
+//! Files are read a window at a time by position (`At`), never whole: a
+//! cut looks at most MAX bytes ahead, so a window holding that much past
+//! where it starts cuts as the whole file would.
 
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
@@ -27,10 +32,37 @@ const AVG: usize = 32 << 10;
 /// No chunk is longer.
 const MAX: usize = 128 << 10;
 
+/// How much of a file is read at a time.
+const WINDOW: usize = 1 << 20;
+
 /// Before the average, a cut needs 17 of the hash's top bits zero; after
 /// it, 13.
 const MASK_SMALL: u64 = !0u64 << (64 - 17);
 const MASK_LARGE: u64 = !0u64 << (64 - 13);
+
+/// What is read by position: a file, or bytes in memory.
+pub trait At {
+    /// Fills buf with the bytes from offset on, all of them or an error.
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<()>;
+}
+
+impl At for [u8] {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<()> {
+        let start = usize::try_from(offset).map_err(io::Error::other)?;
+        let src = start
+            .checked_add(buf.len())
+            .and_then(|end| self.get(start..end))
+            .ok_or_else(|| io::Error::from(io::ErrorKind::UnexpectedEof))?;
+        buf.copy_from_slice(src);
+        Ok(())
+    }
+}
+
+impl At for std::fs::File {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<()> {
+        std::os::unix::fs::FileExt::read_exact_at(self, buf, offset)
+    }
+}
 
 /// The gear table: 256 fixed pseudo-random words, the same in every
 /// place (splitmix64 from a fixed seed).
@@ -85,16 +117,63 @@ fn name(chunk: &[u8]) -> String {
         .collect()
 }
 
-/// A file's chunks, in order: each one's length and name.
-pub fn chunks(data: &[u8]) -> Vec<(u32, String)> {
-    let mut out = vec![];
-    let mut rest = data;
-    while !rest.is_empty() {
-        let n = cut(rest);
-        out.push((n as u32, name(&rest[..n])));
-        rest = &rest[n..];
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Calls f with each chunk of the first len bytes of src, in order, and
+/// its offset.
+fn each_chunk(src: &(impl At + ?Sized), len: u64, mut f: impl FnMut(u64, &[u8])) -> io::Result<()> {
+    let mut buf: Vec<u8> = Vec::with_capacity(WINDOW + MAX);
+    let (mut lo, mut read, mut at) = (0usize, 0u64, 0u64);
+    loop {
+        if buf.len() - lo < MAX && read < len {
+            buf.drain(..lo);
+            lo = 0;
+            let n = usize::try_from((len - read).min(WINDOW as u64)).unwrap_or(WINDOW);
+            let start = buf.len();
+            buf.resize(start + n, 0);
+            src.read_at(&mut buf[start..], read)?;
+            read += n as u64;
+            continue;
+        }
+        if lo == buf.len() {
+            return Ok(());
+        }
+        let n = cut(&buf[lo..]);
+        f(at, &buf[lo..lo + n]);
+        lo += n;
+        at += n as u64;
     }
-    out
+}
+
+/// Calls f with the bytes of src from offset on, len of them, a window
+/// at a time.
+fn each_window(
+    src: &(impl At + ?Sized),
+    offset: u64,
+    len: u64,
+    mut f: impl FnMut(&[u8]) -> io::Result<()>,
+) -> io::Result<()> {
+    let mut buf = vec![0u8; WINDOW.min(usize::try_from(len).unwrap_or(WINDOW))];
+    let mut done = 0u64;
+    while done < len {
+        let n = usize::try_from((len - done).min(buf.len() as u64)).unwrap_or(buf.len());
+        src.read_at(&mut buf[..n], offset + done)?;
+        f(&buf[..n])?;
+        done += n as u64;
+    }
+    Ok(())
+}
+
+/// The SHA-256 of src's first len bytes, in hex.
+pub fn sha256(src: &(impl At + ?Sized), len: u64) -> io::Result<String> {
+    let mut h = ring::digest::Context::new(&ring::digest::SHA256);
+    each_window(src, 0, len, |b| {
+        h.update(b);
+        Ok(())
+    })?;
+    Ok(hex(h.finish().as_ref()))
 }
 
 /// What a place has of a file, for the place sending it to send what it
@@ -110,23 +189,22 @@ pub struct Base {
 }
 
 impl Base {
-    pub fn of(copy: &str, path: &str, data: &[u8]) -> Base {
-        Base {
+    /// The base of src's first len bytes, read once.
+    pub fn of(copy: &str, path: &str, src: &(impl At + ?Sized), len: u64) -> io::Result<Base> {
+        let mut h = ring::digest::Context::new(&ring::digest::SHA256);
+        let mut chunks = vec![];
+        each_chunk(src, len, |_, c| {
+            h.update(c);
+            chunks.push((c.len() as u32, name(c)));
+        })?;
+        Ok(Base {
             copy: copy.to_string(),
             path: path.to_string(),
-            digest: sha256(data),
-            size: data.len() as u64,
-            chunks: chunks(data),
-        }
+            digest: hex(h.finish().as_ref()),
+            size: len,
+            chunks,
+        })
     }
-}
-
-fn sha256(data: &[u8]) -> String {
-    ring::digest::digest(&ring::digest::SHA256, data)
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
 }
 
 /// How a file is made from an older copy of it: in order, each part
@@ -141,92 +219,131 @@ pub struct Delta {
     pub sent: u64,
 }
 
-/// How to send data to a place that has base: the delta and the bytes it
-/// sends. None when it would send nearly the whole file anyway.
-pub fn plan(base: &Base, data: &[u8]) -> Option<(Delta, Vec<u8>)> {
-    /// Adds a part, joined to the one before when they run on.
-    fn push(parts: &mut Vec<(Option<u64>, u64)>, at: Option<u64>, len: u64) {
-        if len == 0 {
-            return;
-        }
-        if let Some(last) = parts.last_mut() {
-            let runs_on = match (last.0, at) {
-                (Some(a), Some(b)) => a + last.1 == b,
-                (None, None) => true,
-                _ => false,
-            };
-            if runs_on {
-                last.1 += len;
-                return;
+impl Delta {
+    /// Where the bytes it sends are in the file it makes, in order: each
+    /// range's offset and length.
+    pub fn sent_ranges(&self) -> Vec<(u64, u64)> {
+        let mut out = vec![];
+        let mut at = 0u64;
+        for (from, len) in &self.parts {
+            if from.is_none() {
+                out.push((at, *len));
             }
+            at += len;
         }
-        parts.push((at, len));
+        out
     }
-    let mut parts: Vec<(Option<u64>, u64)> = vec![];
-    let mut sent = vec![];
-    let size = base.size as usize;
-    if size <= data.len() && size > 0 && sha256(&data[..size]) == base.digest {
-        // Appended to: the older copy, then what follows it.
-        push(&mut parts, Some(0), base.size);
-        push(&mut parts, None, (data.len() - size) as u64);
-        sent.extend_from_slice(&data[size..]);
-    } else {
-        let mut at = HashMap::new();
-        let mut offset = 0u64;
-        for (len, name) in &base.chunks {
-            at.entry((name.as_str(), *len)).or_insert(offset);
-            offset += u64::from(*len);
-        }
-        let mut rest = data;
-        while !rest.is_empty() {
-            let n = cut(rest);
-            let chunk = &rest[..n];
-            match at.get(&(name(chunk).as_str(), n as u32)) {
-                Some(o) if o + n as u64 <= base.size => push(&mut parts, Some(*o), n as u64),
-                _ => {
-                    push(&mut parts, None, n as u64);
-                    sent.extend_from_slice(chunk);
-                }
-            }
-            rest = &rest[n..];
-        }
-    }
-    if sent.len() as u64 * 10 > data.len() as u64 * 9 {
-        return None;
-    }
-    let delta = Delta {
-        base: base.digest.clone(),
-        parts,
-        sent: sent.len() as u64,
-    };
-    Some((delta, sent))
 }
 
-/// The file a delta makes from base (the older copy) and the bytes sent;
-/// none when they do not fit it.
-pub fn rebuild(delta: &Delta, base: &[u8], sent: &[u8], size: u64) -> Option<Vec<u8>> {
-    if sha256(base) != delta.base || sent.len() as u64 != delta.sent {
-        return None;
+/// Adds a part, joined to the one before when they run on.
+fn push(parts: &mut Vec<(Option<u64>, u64)>, at: Option<u64>, len: u64) {
+    if len == 0 {
+        return;
     }
-    let mut out = Vec::with_capacity(usize::try_from(size).ok()?);
-    let mut next = 0usize;
+    if let Some(last) = parts.last_mut() {
+        let runs_on = match (last.0, at) {
+            (Some(a), Some(b)) => a + last.1 == b,
+            (None, None) => true,
+            _ => false,
+        };
+        if runs_on {
+            last.1 += len;
+            return;
+        }
+    }
+    parts.push((at, len));
+}
+
+/// How to send src's first len bytes to a place that has base, read once;
+/// the bytes it sends are `sent_ranges` of src. None when it would send
+/// nearly the whole file anyway.
+pub fn plan(base: &Base, src: &(impl At + ?Sized), len: u64) -> io::Result<Option<Delta>> {
+    let mut at = HashMap::new();
+    let mut offset = 0u64;
+    for (n, name) in &base.chunks {
+        at.entry((name.as_str(), *n)).or_insert(offset);
+        offset += u64::from(*n);
+    }
+    let mut parts: Vec<(Option<u64>, u64)> = vec![];
+    let mut sent = 0u64;
+    // The older copy's size of the new file's start, hashed on the way,
+    // for an append.
+    let mut head = ring::digest::Context::new(&ring::digest::SHA256);
+    each_chunk(src, len, |off, chunk| {
+        if off < base.size {
+            let n = usize::try_from(base.size - off).map_or(chunk.len(), |n| n.min(chunk.len()));
+            head.update(&chunk[..n]);
+        }
+        let n = chunk.len() as u64;
+        match at.get(&(name(chunk).as_str(), chunk.len() as u32)) {
+            Some(o) if o + n <= base.size => push(&mut parts, Some(*o), n),
+            _ => {
+                push(&mut parts, None, n);
+                sent += n;
+            }
+        }
+    })?;
+    if base.size > 0 && base.size <= len && hex(head.finish().as_ref()) == base.digest {
+        // Appended to: the older copy, then what follows it.
+        parts.clear();
+        push(&mut parts, Some(0), base.size);
+        push(&mut parts, None, len - base.size);
+        sent = len - base.size;
+    }
+    if sent * 10 > len * 9 {
+        return Ok(None);
+    }
+    Ok(Some(Delta {
+        base: base.digest.clone(),
+        parts,
+        sent,
+    }))
+}
+
+/// Writes the file a delta makes from base (the older copy, base_len
+/// bytes) and the bytes sent (sent_len) to out, size bytes, giving its
+/// SHA-256; none when they do not fit it, and then what was written is
+/// to be thrown away.
+pub fn rebuild(
+    delta: &Delta,
+    base: &(impl At + ?Sized),
+    base_len: u64,
+    sent: &(impl At + ?Sized),
+    sent_len: u64,
+    size: u64,
+    out: &mut impl Write,
+) -> io::Result<Option<String>> {
+    if sent_len != delta.sent || sha256(base, base_len)? != delta.base {
+        return Ok(None);
+    }
+    let mut h = ring::digest::Context::new(&ring::digest::SHA256);
+    let (mut next, mut written) = (0u64, 0u64);
     for (at, len) in &delta.parts {
-        let len = usize::try_from(*len).ok()?;
+        let Some(end) = written.checked_add(*len).filter(|e| *e <= size) else {
+            return Ok(None);
+        };
+        let mut copy = |b: &[u8]| {
+            h.update(b);
+            out.write_all(b)
+        };
         match at {
             Some(at) => {
-                let at = usize::try_from(*at).ok()?;
-                out.extend_from_slice(base.get(at..at.checked_add(len)?)?);
+                if at.checked_add(*len).is_none_or(|e| e > base_len) {
+                    return Ok(None);
+                }
+                each_window(base, *at, *len, &mut copy)?;
             }
             None => {
-                out.extend_from_slice(sent.get(next..next.checked_add(len)?)?);
+                if next + len > sent_len {
+                    return Ok(None);
+                }
+                each_window(sent, next, *len, &mut copy)?;
                 next += len;
             }
         }
-        if out.len() as u64 > size {
-            return None;
-        }
+        written = end;
     }
-    (next == sent.len() && out.len() as u64 == size).then_some(out)
+    Ok((next == sent_len && written == size).then(|| hex(h.finish().as_ref())))
 }
 
 #[cfg(test)]
@@ -246,18 +363,57 @@ mod tests {
             .collect()
     }
 
+    fn base(data: &[u8]) -> Base {
+        Base::of("profile", "~/f", data, data.len() as u64).unwrap()
+    }
+
+    /// The bytes a delta sends of new.
+    fn sent(delta: &Delta, new: &[u8]) -> Vec<u8> {
+        let mut out = vec![];
+        for (at, len) in delta.sent_ranges() {
+            out.extend_from_slice(&new[at as usize..(at + len) as usize]);
+        }
+        out
+    }
+
     fn round_trip(old: &[u8], new: &[u8]) -> u64 {
-        let base = Base::of("profile", "~/f", old);
-        let (delta, sent) = plan(&base, new).expect("worth a delta");
-        let made = rebuild(&delta, old, &sent, new.len() as u64).expect("rebuilt");
+        let delta = plan(&base(old), new, new.len() as u64)
+            .unwrap()
+            .expect("worth a delta");
+        let s = sent(&delta, new);
+        let mut made = vec![];
+        let digest = rebuild(
+            &delta,
+            old,
+            old.len() as u64,
+            &s[..],
+            s.len() as u64,
+            new.len() as u64,
+            &mut made,
+        )
+        .unwrap()
+        .expect("rebuilt");
         assert_eq!(made, new);
+        assert_eq!(digest, sha256(new, new.len() as u64).unwrap());
         delta.sent
+    }
+
+    /// The chunks of data cut from it whole, as one cut each in turn.
+    fn whole_cuts(data: &[u8]) -> Vec<usize> {
+        let mut out = vec![];
+        let mut rest = data;
+        while !rest.is_empty() {
+            let n = cut(rest);
+            out.push(n);
+            rest = &rest[n..];
+        }
+        out
     }
 
     #[test]
     fn chunks_are_cut_within_their_bounds_and_cover_the_file() {
         let data = noise(2 << 20, 1);
-        let cs = chunks(&data);
+        let cs = base(&data).chunks;
         let total: u64 = cs.iter().map(|(n, _)| u64::from(*n)).sum();
         assert_eq!(total, data.len() as u64);
         for (n, _) in &cs[..cs.len() - 1] {
@@ -265,6 +421,14 @@ mod tests {
         }
         let avg = data.len() / cs.len();
         assert!((AVG / 2..AVG * 2).contains(&avg), "average {avg}");
+    }
+
+    #[test]
+    fn a_file_read_a_window_at_a_time_cuts_as_it_does_whole() {
+        let data = noise(5 * WINDOW + 12_345, 8);
+        let mut windowed = vec![];
+        each_chunk(&data[..], data.len() as u64, |_, c| windowed.push(c.len())).unwrap();
+        assert_eq!(windowed, whole_cuts(&data));
     }
 
     #[test]
@@ -277,10 +441,10 @@ mod tests {
 
     #[test]
     fn an_edit_sends_the_chunks_around_it() {
-        let old = noise(1 << 20, 3);
+        let old = noise(3 << 20, 3);
         let mut new = old.clone();
         new.splice(
-            500_000..500_010,
+            2_500_000..2_500_010,
             b"inserted, a little longer".iter().copied(),
         );
         let sent = round_trip(&old, &new);
@@ -289,8 +453,13 @@ mod tests {
 
     #[test]
     fn a_file_unlike_its_base_goes_whole() {
-        let base = Base::of("profile", "~/f", &noise(1 << 20, 4));
-        assert!(plan(&base, &noise(1 << 20, 5)).is_none());
+        let old = noise(1 << 20, 4);
+        let new = noise(1 << 20, 5);
+        assert!(
+            plan(&base(&old), &new[..], new.len() as u64)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -298,8 +467,21 @@ mod tests {
         let old = noise(1 << 20, 6);
         let mut new = old.clone();
         new.extend_from_slice(b"tail");
-        let (delta, sent) = plan(&Base::of("profile", "~/f", &old), &new).expect("a delta");
+        let delta = plan(&base(&old), &new[..], new.len() as u64)
+            .unwrap()
+            .expect("a delta");
+        let s = sent(&delta, &new);
         let other = noise(1 << 20, 7);
-        assert!(rebuild(&delta, &other, &sent, new.len() as u64).is_none());
+        let rebuilt = rebuild(
+            &delta,
+            &other[..],
+            other.len() as u64,
+            &s[..],
+            s.len() as u64,
+            new.len() as u64,
+            &mut vec![],
+        )
+        .unwrap();
+        assert!(rebuilt.is_none());
     }
 }

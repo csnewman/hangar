@@ -21,15 +21,24 @@
 //! which no environment is served. A place notices its own changes by
 //! scanning a copy: whenever its workers say an environment changed it,
 //! the Files page writes to it, and before two places compare versions.
+//!
+//! No file is held in memory whole: one is hashed, cut and sent a window
+//! at a time from the file itself, and one coming in is written to
+//! `.links/incoming/` as its pieces arrive, then renamed into its copy.
+//! One that stops coming part way is kept a while, and a place that wants
+//! it again says how much it holds (`Held`), for the rest alone to come.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::io::Write;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
+use crate::chunks::At;
 pub use crate::chunks::{Base, Delta};
 use crate::fail::{self, Fail};
 use crate::http::App;
@@ -38,7 +47,17 @@ use crate::store::{Error as StoreError, Result as StoreResult, Tx};
 use crate::users::Principal;
 
 /// The largest file linked: a larger one stays in its place.
-pub const MAX_FILE: u64 = 64 << 20;
+pub const MAX_FILE: u64 = 4 << 30;
+
+/// The largest file a place speaking link level 1 takes, which holds
+/// each file in memory whole.
+pub const LEVEL1_MAX_FILE: u64 = 64 << 20;
+
+/// Where files coming in are written as their pieces arrive.
+const INCOMING: &str = ".links/incoming";
+
+/// How long a file that stopped coming part way is kept for the rest.
+const PARTIAL_KEPT: Duration = Duration::from_secs(24 * 3600);
 
 /// How much of a file one message carries.
 pub const PIECE: usize = 1 << 20;
@@ -148,13 +167,26 @@ pub struct FileVersions {
 
 /// The files a place wants sent, by copy and path, and of each it has an
 /// older copy of, what it has (`Base`), for the place sending to send
-/// what it lacks. A place of an older build lists no bases, and is sent
-/// every file whole.
+/// what it lacks; and of each it holds the start of from a send that
+/// stopped, how much (`Held`), for the rest alone to come. A place of an
+/// older build lists neither, and is sent every file whole.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct FileWant {
     pub want: Vec<(String, String)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bases: Vec<Base>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub held: Vec<Held>,
+}
+
+/// The start of a file a place holds, of the version with the digest
+/// given: its first `have` bytes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Held {
+    pub copy: String,
+    pub path: String,
+    pub digest: String,
+    pub have: u64,
 }
 
 impl FileWant {
@@ -168,7 +200,8 @@ impl FileWant {
 /// place that has its content already, for a deleted file, or for the
 /// place to ask for what it lacks of a large file. With a delta, the
 /// pieces are the bytes it sends, which with the receiving place's older
-/// copy make the file; sent only to a place that listed that copy.
+/// copy make the file; sent only to a place that listed that copy. The
+/// delta is in the first piece alone.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilePiece {
     pub copy: String,
@@ -205,6 +238,9 @@ pub enum Carry {
     Whole,
     /// What a place that has this of it lacks.
     Delta(Arc<Base>),
+    /// Its content from an offset on, to a place holding what comes
+    /// before of the version with this digest; whole if it has another.
+    After { digest: String, from: u64 },
 }
 
 impl Carry {
@@ -213,7 +249,7 @@ impl Carry {
             Carry::Version => 0,
             Carry::Content => 1,
             Carry::Delta(_) => 2,
-            Carry::Whole => 3,
+            Carry::Whole | Carry::After { .. } => 3,
         }
     }
 
@@ -300,6 +336,8 @@ pub struct Replaced {
 /// compared or written.
 #[derive(Default)]
 pub struct Files {
+    /// Files coming in, until each is whole.
+    partials: Mutex<HashMap<PartKey, Partial>>,
     dirty: Mutex<HashSet<Uuid>>,
     /// Copies with a file changed too soon after its last version to be
     /// sent, and when to look at them again (milliseconds).
@@ -337,12 +375,152 @@ impl Files {
     }
 }
 
+/// A file coming in: the person here, the place it comes from, its copy
+/// and its path.
+type PartKey = (Uuid, Uuid, String, String);
+
+/// A file coming in, written to `.links/incoming/` as its pieces arrive.
+struct Partial {
+    /// Its first piece: its version, and how it is made.
+    first: FilePiece,
+    rel: String,
+    file: std::fs::File,
+    got: u64,
+    /// The SHA-256 of what came.
+    hash: ring::digest::Context,
+    touched: Instant,
+}
+
+/// A file that came whole: its first piece, and where in the files root
+/// what its pieces carried is. Its content matches its digest, but for a
+/// delta, which is what makes it (`rebuild`).
+pub struct Came {
+    pub piece: FilePiece,
+    pub rel: String,
+}
+
+/// A new file's place in `.links/incoming/`.
+fn incoming() -> String {
+    format!("{INCOMING}/{}", Uuid::new_v4())
+}
+
+impl Files {
+    /// Writes a piece of a file a place sends; the file, once its last
+    /// piece has come. A first piece starts the file afresh; a piece that
+    /// does not follow the last one taken lets the file go.
+    pub fn receive(
+        &self,
+        root: &Root,
+        user: Uuid,
+        from: Uuid,
+        p: FilePiece,
+        bytes: &[u8],
+    ) -> Result<Option<Came>, String> {
+        let key = (user, from, p.copy.clone(), p.path.clone());
+        let found = {
+            let mut parts = self.partials.lock().unwrap();
+            parts.retain(|_, q| {
+                let keep = q.touched.elapsed() < PARTIAL_KEPT;
+                if !keep {
+                    let _ = root.remove(&q.rel);
+                }
+                keep
+            });
+            parts.remove(&key)
+        };
+        let mut part = match found {
+            Some(q) if p.offset > 0 && q.first.version == p.version && q.got == p.offset => q,
+            other => {
+                if let Some(q) = other {
+                    let _ = root.remove(&q.rel);
+                }
+                if p.offset > 0 {
+                    return Ok(None);
+                }
+                if once_swept() {
+                    sweep(root);
+                }
+                let rel = incoming();
+                let file = root.create(&rel).map_err(io)?;
+                Partial {
+                    first: p,
+                    rel,
+                    file,
+                    got: 0,
+                    hash: ring::digest::Context::new(&ring::digest::SHA256),
+                    touched: Instant::now(),
+                }
+            }
+        };
+        let total = part.first.total();
+        if part.got + bytes.len() as u64 > total {
+            let _ = root.remove(&part.rel);
+            return Err(format!("{} is longer than it says", part.first.path));
+        }
+        std::os::unix::fs::FileExt::write_all_at(&part.file, bytes, part.got).map_err(io)?;
+        part.hash.update(bytes);
+        part.got += bytes.len() as u64;
+        part.touched = Instant::now();
+        if part.got < total {
+            self.partials.lock().unwrap().insert(key, part);
+            return Ok(None);
+        }
+        part.file.sync_all().map_err(io)?;
+        if part.first.delta.is_none()
+            && hex(part.hash.finish().as_ref()) != part.first.version.digest
+        {
+            let _ = root.remove(&part.rel);
+            return Err(format!(
+                "{}'s content does not match its digest",
+                part.first.path
+            ));
+        }
+        Ok(Some(Came {
+            piece: part.first,
+            rel: part.rel,
+        }))
+    }
+
+    /// How much this place holds of a file coming whole from a place, of
+    /// the version given, so far.
+    fn held(&self, user: Uuid, from: Uuid, copy: &str, path: &str, v: &FileVersion) -> Option<u64> {
+        let parts = self.partials.lock().unwrap();
+        let q = parts.get(&(user, from, copy.to_string(), path.to_string()))?;
+        (q.first.delta.is_none() && q.first.version == *v && q.got > 0).then_some(q.got)
+    }
+}
+
+/// Whether this is the first file to come in since the server started,
+/// when what earlier runs left is swept.
+fn once_swept() -> bool {
+    static SWEPT: OnceLock<()> = OnceLock::new();
+    SWEPT.set(()).is_ok()
+}
+
+/// Removes the files coming in that no piece has reached for a while:
+/// what an earlier run, or another server sharing the files root, left.
+fn sweep(root: &Root) {
+    let Ok(files) = root.files(INCOMING) else {
+        return;
+    };
+    let cutoff = Utc::now() - chrono::Duration::from_std(PARTIAL_KEPT).unwrap_or_default();
+    for (rel, info) in files {
+        if info.modified < cutoff {
+            let _ = root.remove(&format!("{INCOMING}/{rel}"));
+        }
+    }
+}
+
 fn hex(b: &[u8]) -> String {
     b.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn sha256(data: &[u8]) -> String {
-    hex(ring::digest::digest(&ring::digest::SHA256, data).as_ref())
+/// The SHA-256 of the regular file at rel, and its size, read a window
+/// at a time.
+fn file_digest(root: &Root, rel: &str) -> std::io::Result<(String, u64)> {
+    let f = root.open_read(rel)?;
+    let len = f.metadata()?.len();
+    Ok((crate::chunks::sha256(&f, len)?, len))
 }
 
 fn staging() -> String {
@@ -470,7 +648,7 @@ fn scan(
                 continue;
             }
         }
-        let data = match root.read(&file_path(copy, &rel)) {
+        let (digest, size) = match file_digest(root, &file_path(copy, &rel)) {
             Ok(d) => d,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 present.remove(&rel);
@@ -478,7 +656,6 @@ fn scan(
             }
             Err(e) => return Err(io(e)),
         };
-        let digest = sha256(&data);
         if let Some(k) = st.files.get_mut(&rel)
             && !k.v.deleted
             && k.v.digest == digest
@@ -498,7 +675,7 @@ fn scan(
                     origin: place,
                     digest,
                     mode: seen.mode,
-                    size: data.len() as u64,
+                    size,
                     deleted: false,
                 },
                 seen: Some(seen),
@@ -529,35 +706,43 @@ fn scan(
 
 /// Keeps a version of a file that another place's change replaced.
 fn keep(root: &Root, copy: Uuid, path: &str, k: &FileVersion, by: Uuid) -> Result<(), String> {
-    let data = match root.read(&file_path(copy, path)) {
-        Ok(d) => d,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(io(e)),
-    };
-    keep_data(root, copy, path, &data, k.mode, k.time(), by, false)
+    keep_file(
+        root,
+        copy,
+        path,
+        &file_path(copy, path),
+        k.mode,
+        k.time(),
+        by,
+        false,
+    )
 }
 
-/// Keeps data in a copy's history as a version of its file at path that
-/// another replaced.
+/// Keeps a copy of the file at src in a copy's history as a version of
+/// its file at path that another replaced; none when src is gone.
 #[allow(clippy::too_many_arguments)]
-fn keep_data(
+fn keep_file(
     root: &Root,
     copy: Uuid,
     path: &str,
-    data: &[u8],
+    src: &str,
     mode: u32,
     time: i64,
     by: Uuid,
     merged: bool,
 ) -> Result<(), String> {
     let id = Uuid::new_v4();
-    root.replace(&kept_path(copy, id), data, 0o600, &staging())
-        .map_err(io)?;
+    match root.copy(src, &kept_path(copy, id), 0o600, &staging()) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(io(e)),
+    }
+    let size = root.lstat(&kept_path(copy, id)).map_err(io)?.size;
     let mut h: Vec<Replaced> = load(root, &history_path(copy))?;
     h.push(Replaced {
         id,
         path: path.to_string(),
-        size: data.len() as u64,
+        size,
         mode,
         time,
         replaced_at: Utc::now(),
@@ -600,8 +785,9 @@ pub fn merge_copy(root: &Root, place: Uuid, from: Uuid, into: Uuid) -> Result<Ve
         if !valid(&rel) {
             continue;
         }
-        let data = match root.read(&file_path(from, &rel)) {
-            Ok(d) => d,
+        let src = file_path(from, &rel);
+        let digest = match file_digest(root, &src) {
+            Ok((d, _)) => d,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(io(e)),
         };
@@ -609,28 +795,31 @@ pub fn merge_copy(root: &Root, place: Uuid, from: Uuid, into: Uuid) -> Result<Ve
         let target = file_path(into, &rel);
         let fv = version(&sf, &rel);
         if let Some(there) = theirs.get(&rel) {
-            let mine = root.read(&target).map_err(io)?;
-            if mine == data {
+            if file_digest(root, &target).map_err(io)?.0 == digest {
                 continue;
             }
             let iv = version(&si, &rel);
             let (a, b) = (when(&fv, &info), when(&iv, there));
             if a <= b {
-                keep_data(root, into, &rel, &data, mode, a.0, place, true)?;
+                keep_file(root, into, &rel, &src, mode, a.0, place, true)?;
                 continue;
             }
-            keep_data(
+            keep_file(
                 root,
                 into,
                 &rel,
-                &mine,
+                &target,
                 there.mode & 0o777,
                 b.0,
                 place,
                 true,
             )?;
         }
-        root.replace(&target, &data, mode, &staging()).map_err(io)?;
+        match root.copy(&src, &target, mode, &staging()) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(io(e)),
+        }
         if let Some(v) = fv {
             let seen = root.lstat(&target).ok().map(|i| Seen {
                 size: i.size,
@@ -842,13 +1031,15 @@ async fn look(app: &App, place: Uuid, copies: &[Uuid]) -> Result<(), String> {
 }
 
 /// Every version this place has of a person's linked files that are for
-/// the place to, each copy scanned first; changes the scan found go to
-/// every connection but the one asking.
+/// the place to, but of files larger than it takes (max), each copy
+/// scanned first; changes the scan found go to every connection but the
+/// one asking.
 pub async fn versions(
     app: &App,
     place: Uuid,
     user: Uuid,
     to: Uuid,
+    max: u64,
 ) -> Result<(FileVersions, Vec<Job>), String> {
     let (all, paths) = {
         let mut tx = app.store.read().await.map_err(store_err)?;
@@ -885,6 +1076,7 @@ pub async fn versions(
             Ok::<_, String>(
                 st.files
                     .into_iter()
+                    .filter(|(_, k)| k.v.size <= max)
                     .map(|(path, k)| Listed { path, version: k.v })
                     .collect(),
             )
@@ -904,13 +1096,14 @@ pub struct Compared {
     pub found: Vec<Job>,
 }
 
-/// Compares another place's versions with this place's: theirs newer are
-/// wanted, this place's newer are to be sent, and the same content under
-/// two versions becomes one version, counting both.
+/// Compares another place's (from's) versions with this place's: theirs
+/// newer are wanted, this place's newer are to be sent, and the same
+/// content under two versions becomes one version, counting both.
 pub async fn compare(
     app: &App,
     place: Uuid,
     user: Uuid,
+    from: Uuid,
     theirs: &FileVersions,
 ) -> Result<Compared, String> {
     let (all, paths) = {
@@ -983,7 +1176,16 @@ pub async fn compare(
                 Order::Theirs { .. } => {
                     if !(t.version.deleted && mine.is_none_or(|m| m.deleted)) {
                         out.want.want.push((l.key.clone(), t.path.clone()));
-                        if let Some(copy) = l.copy
+                        if let Some(have) =
+                            app.link_files.held(user, from, &l.key, &t.path, &t.version)
+                        {
+                            out.want.held.push(Held {
+                                copy: l.key.clone(),
+                                path: t.path.clone(),
+                                digest: t.version.digest.clone(),
+                                have,
+                            });
+                        } else if let Some(copy) = l.copy
                             && let Some(b) = tokio::task::block_in_place(|| {
                                 base(&app.root, copy, &l.key, &t.path, mine, &t.version)
                             })
@@ -1030,21 +1232,67 @@ fn base(
     if theirs.deleted || theirs.size < DELTA_MIN || mine.is_none_or(|m| m.deleted || m.size == 0) {
         return None;
     }
-    let data = root.read(&file_path(copy, path)).ok()?;
-    Some(Base::of(key, path, &data))
+    let f = root.open_read(&file_path(copy, path)).ok()?;
+    let len = f.metadata().ok()?.len();
+    Base::of(key, path, &f, len).ok()
 }
 
-/// A file to send: its version and the bytes its pieces carry, as this
-/// place holds it: the content whole, what a place that has a base
-/// lacks, or nothing for its version alone. None when it holds no such
-/// file, or the file changed since its version was made (it is looked
-/// at again, and sent once it has a version).
+/// What a file's pieces carry, read as each goes: ranges of an open
+/// file, in order, from an offset into them on.
+pub struct Body {
+    file: Option<std::fs::File>,
+    ranges: Vec<(u64, u64)>,
+    pub from: u64,
+}
+
+impl Body {
+    fn none() -> Body {
+        Body {
+            file: None,
+            ranges: vec![],
+            from: 0,
+        }
+    }
+
+    /// The n bytes at offset into what it carries.
+    pub fn read(&self, offset: u64, n: usize) -> std::io::Result<Vec<u8>> {
+        let mut out = vec![0u8; n];
+        let Some(file) = &self.file else {
+            return Ok(vec![]);
+        };
+        let mut filled = 0usize;
+        let mut at = 0u64;
+        for (start, len) in &self.ranges {
+            let end = at + len;
+            let cur = offset + filled as u64;
+            if filled < n && cur >= at && cur < end {
+                let within = cur - at;
+                let take = usize::try_from((len - within).min((n - filled) as u64)).unwrap_or(0);
+                file.read_at(&mut out[filled..filled + take], start + within)?;
+                filled += take;
+            }
+            at = end;
+        }
+        out.truncate(filled);
+        Ok(out)
+    }
+}
+
+/// A file to send: its version and what its pieces carry, as this place
+/// holds it: the content whole, what a place that has a base lacks, the
+/// rest of what a place holds the start of, or nothing for its version
+/// alone. None when it holds no such file, the file is larger than the
+/// place to takes (max), or the file changed since its version was made
+/// (it is looked at again, and sent once it has a version). The file is
+/// checked and planned outside the person's lock, read from the one it
+/// opened under it.
 pub async fn read(
     app: &App,
     user: Uuid,
     job: &Job,
     to: Uuid,
-) -> Result<Option<(FilePiece, Vec<u8>)>, String> {
+    max: u64,
+) -> Result<Option<(FilePiece, Body)>, String> {
     let for_them = {
         let mut tx = app.store.read().await.map_err(store_err)?;
         linked(&mut tx, user)
@@ -1059,80 +1307,141 @@ pub async fn read(
     let Some(copy) = local(app, user, &job.copy).await.map_err(store_err)? else {
         return Ok(None);
     };
-    let _held = app.link_files.lock(user).await;
-    tokio::task::block_in_place(|| {
-        let st: State = load(&app.root, &state_path(copy))?;
-        let Some(k) = st.files.get(&job.path) else {
-            return Ok(None);
-        };
-        let mut piece = FilePiece {
-            copy: job.copy.clone(),
-            path: job.path.clone(),
-            version: k.v.clone(),
-            offset: 0,
-            content: false,
-            delta: None,
-        };
-        let content = match job.send {
-            Carry::Version => false,
-            Carry::Content => k.v.size < DELTA_MIN,
-            Carry::Whole | Carry::Delta(_) => true,
-        };
-        if !content || k.v.deleted {
-            return Ok(Some((piece, vec![])));
-        }
-        let data = match app.root.read(&file_path(copy, &job.path)) {
-            Ok(d) => d,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                app.link_files.mark([copy]);
+    let found = {
+        let _held = app.link_files.lock(user).await;
+        tokio::task::block_in_place(|| {
+            let st: State = load(&app.root, &state_path(copy))?;
+            let Some(k) = st.files.get(&job.path) else {
+                return Ok(None);
+            };
+            if k.v.size > max {
                 return Ok(None);
             }
-            Err(e) => return Err(io(e)),
-        };
-        if sha256(&data) != k.v.digest {
+            let piece = FilePiece {
+                copy: job.copy.clone(),
+                path: job.path.clone(),
+                version: k.v.clone(),
+                offset: 0,
+                content: false,
+                delta: None,
+            };
+            let content = match job.send {
+                Carry::Version => false,
+                Carry::Content => k.v.size < DELTA_MIN,
+                Carry::Whole | Carry::Delta(_) | Carry::After { .. } => true,
+            };
+            if !content || k.v.deleted {
+                return Ok(Some((piece, None)));
+            }
+            match app.root.open_read(&file_path(copy, &job.path)) {
+                Ok(f) => Ok(Some((piece, Some(f)))),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    app.link_files.mark([copy]);
+                    Ok(None)
+                }
+                Err(e) => Err(io(e)),
+            }
+        })?
+    };
+    let Some((mut piece, file)) = found else {
+        return Ok(None);
+    };
+    let Some(file) = file else {
+        return Ok(Some((piece, Body::none())));
+    };
+    tokio::task::block_in_place(|| {
+        let len = file.metadata().map_err(io)?.len();
+        if len != piece.version.size
+            || crate::chunks::sha256(&file, len).map_err(io)? != piece.version.digest
+        {
             app.link_files.mark([copy]);
             return Ok(None);
         }
         piece.content = true;
         if let Carry::Delta(base) = &job.send
-            && base.digest != k.v.digest
-            && let Some((delta, sent)) = crate::chunks::plan(base, &data)
+            && base.digest != piece.version.digest
+            && let Some(delta) = crate::chunks::plan(base, &file, len).map_err(io)?
         {
+            let ranges = delta.sent_ranges();
             piece.delta = Some(delta);
-            return Ok(Some((piece, sent)));
+            return Ok(Some((
+                piece,
+                Body {
+                    file: Some(file),
+                    ranges,
+                    from: 0,
+                },
+            )));
         }
-        Ok(Some((piece, data)))
+        let from = match &job.send {
+            Carry::After { digest, from } if *digest == piece.version.digest && *from <= len => {
+                *from
+            }
+            _ => 0,
+        };
+        Ok(Some((
+            piece,
+            Body {
+                file: Some(file),
+                ranges: vec![(0, len)],
+                from,
+            },
+        )))
     })
 }
 
-/// The file a delta another place sent makes, from this place's copy of
-/// it; none when this place's is not the one the delta is from, which
-/// is then asked for whole.
-pub async fn rebuild(
-    app: &App,
-    user: Uuid,
-    piece: &FilePiece,
-    sent: &[u8],
-) -> Result<Option<Vec<u8>>, String> {
-    let Some(delta) = &piece.delta else {
-        return Ok(Some(sent.to_vec()));
+/// The file a delta another place sent makes from this place's copy of it
+/// and the bytes that came, written to `.links/incoming/`, which the bytes
+/// that came leave; none when this place's copy is not the one the delta
+/// is from, which is then asked for whole. A file that came whole is as
+/// it came.
+pub async fn rebuild(app: &App, user: Uuid, came: &Came) -> Result<Option<String>, String> {
+    let Some(delta) = &came.piece.delta else {
+        return Ok(Some(came.rel.clone()));
     };
-    if !valid(&piece.path) {
-        return Ok(None);
-    }
-    let Some(copy) = local(app, user, &piece.copy).await.map_err(store_err)? else {
-        return Ok(None);
+    let piece = &came.piece;
+    let local = if valid(&piece.path) {
+        local(app, user, &piece.copy).await.map_err(store_err)?
+    } else {
+        None
     };
     tokio::task::block_in_place(|| {
-        let base = match app.root.read(&file_path(copy, &piece.path)) {
-            Ok(d) => d,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(io(e)),
-        };
-        Ok(
-            crate::chunks::rebuild(delta, &base, sent, piece.version.size)
-                .filter(|made| sha256(made) == piece.version.digest),
-        )
+        let made = (|| {
+            let Some(copy) = local else {
+                return Ok(None);
+            };
+            let base = match app.root.open_read(&file_path(copy, &piece.path)) {
+                Ok(f) => f,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(e) => return Err(io(e)),
+            };
+            let base_len = base.metadata().map_err(io)?.len();
+            let sent = app.root.open_read(&came.rel).map_err(io)?;
+            let sent_len = sent.metadata().map_err(io)?.len();
+            let rel = incoming();
+            let out = app.root.create(&rel).map_err(io)?;
+            let mut w = std::io::BufWriter::new(&out);
+            let digest = crate::chunks::rebuild(
+                delta,
+                &base,
+                base_len,
+                &sent,
+                sent_len,
+                piece.version.size,
+                &mut w,
+            )
+            .and_then(|d| w.flush().map(|()| d))
+            .map_err(io)?;
+            drop(w);
+            if digest.as_deref() == Some(piece.version.digest.as_str()) {
+                Ok(Some(rel))
+            } else {
+                let _ = app.root.remove(&rel);
+                Ok(None)
+            }
+        })();
+        let _ = app.root.remove(&came.rel);
+        made
     })
 }
 
@@ -1151,16 +1460,19 @@ pub struct Taken {
     pub found: Vec<Job>,
 }
 
-/// Takes a file another place sent, whole: written into the copy, in place
-/// of this place's at once, when its version is newer; this place's goes
-/// into the copy's history when the two were made apart. data is its
-/// content, empty for a version sent alone.
+/// Takes a file another place (from) sent, whole: renamed into the copy,
+/// in place of this place's at once, when its version is newer; this
+/// place's goes into the copy's history when the two were made apart.
+/// content is where in the files root its content is, matching its
+/// digest; none for a version sent alone. Content not taken is left
+/// where it is, for the caller to remove.
 pub async fn take(
     app: &App,
     place: Uuid,
     user: Uuid,
+    from: Uuid,
     piece: &FilePiece,
-    data: &[u8],
+    content: Option<&str>,
 ) -> Result<Taken, String> {
     let mut out = Taken::default();
     if !valid(&piece.path) || piece.version.size > MAX_FILE {
@@ -1169,12 +1481,6 @@ pub async fn take(
     let Some(copy) = local(app, user, &piece.copy).await.map_err(store_err)? else {
         return Ok(out);
     };
-    if piece.content && sha256(data) != piece.version.digest {
-        return Err(format!(
-            "{}'s content does not match its digest",
-            piece.path
-        ));
-    }
     let _held = app.link_files.lock(user).await;
     let root = &app.root;
     let job = |send| Job {
@@ -1218,16 +1524,27 @@ pub async fn take(
             out.reply.push(job(Carry::content(
                 mine.as_ref().is_some_and(|m| m.deleted),
             )));
-        } else if !theirs.deleted && !piece.content {
+        } else if !theirs.deleted && content.is_none() {
             out.want.want.push((piece.copy.clone(), piece.path.clone()));
-            out.want.bases.extend(base(
-                root,
-                copy,
-                &piece.copy,
-                &piece.path,
-                mine.as_ref(),
-                theirs,
-            ));
+            match app
+                .link_files
+                .held(user, from, &piece.copy, &piece.path, theirs)
+            {
+                Some(have) => out.want.held.push(Held {
+                    copy: piece.copy.clone(),
+                    path: piece.path.clone(),
+                    digest: theirs.digest.clone(),
+                    have,
+                }),
+                None => out.want.bases.extend(base(
+                    root,
+                    copy,
+                    &piece.copy,
+                    &piece.path,
+                    mine.as_ref(),
+                    theirs,
+                )),
+            }
         } else if theirs.deleted && mine.as_ref().is_none_or(|m| m.deleted) {
             let vv = merge(&mine.map(|m| m.vv).unwrap_or_default(), &theirs.vv);
             st.files.insert(
@@ -1252,8 +1569,10 @@ pub async fn take(
                 root.remove(&target).map_err(io)?;
                 None
             } else {
-                root.replace(&target, data, theirs.mode, &staging())
-                    .map_err(io)?;
+                let Some(content) = content else {
+                    return Err(format!("{} came without its content", piece.path));
+                };
+                root.install(content, &target, theirs.mode).map_err(io)?;
                 root.lstat(&target).ok().map(|i| Seen {
                     size: i.size,
                     mtime: i.modified.timestamp_nanos_opt().unwrap_or_default(),
@@ -1330,7 +1649,6 @@ pub async fn restore(
             return Err(Fail::NotFound("not found".into()));
         };
         let r = h.remove(at);
-        let data = root.read(&kept_path(copy, r.id)).map_err(|e| fail(io(e)))?;
         save(root, &history_path(copy), &h).map_err(fail)?;
         // What is there is kept as the restored version was.
         let mut st: State = load(root, &state_path(copy)).map_err(fail)?;
@@ -1339,9 +1657,8 @@ pub async fn restore(
         if let Some(k) = st.files.get(&r.path).filter(|k| !k.v.deleted) {
             keep(root, copy, &r.path, &k.v, place).map_err(fail)?;
         }
-        root.replace(&file_path(copy, &r.path), &data, r.mode, &staging())
+        root.install(&kept_path(copy, r.id), &file_path(copy, &r.path), r.mode)
             .map_err(|e| fail(io(e)))?;
-        let _ = root.remove(&kept_path(copy, r.id));
         Ok(r.path)
     })?;
     drop(held);

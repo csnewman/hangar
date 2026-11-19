@@ -17,8 +17,11 @@ use crate::seal::Sealer;
 use crate::store::rows::{Link, ServerKey};
 use crate::store::{Error as StoreError, Store};
 
-/// The link protocol's levels this place speaks, oldest and newest.
-pub const LEVELS: [u32; 2] = [1, 1];
+/// The link protocol's levels this place speaks, oldest and newest. At
+/// level 2 a file is never held in memory whole, so files up to
+/// `linkfiles::MAX_FILE` go (64 MiB at level 1), and one that stopped
+/// coming part way resumes where it stopped.
+pub const LEVELS: [u32; 2] = [1, 2];
 
 /// How far a hello's time may be from this place's clock.
 const SKEW: i64 = 300;

@@ -654,6 +654,123 @@ async fn a_large_file_changed_a_little_goes_as_what_changed() {
     );
 }
 
+/// Bytes that look random but are the same every run.
+fn noise(n: usize, mut x: u64) -> Vec<u8> {
+    (0..n)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x as u8
+        })
+        .collect()
+}
+
+/// Where a copy's file is in a place's files root.
+fn on_disk(p: &Place, copy: &str, path: &str) -> std::path::PathBuf {
+    p.server.files_dir().join(copy).join(path)
+}
+
+/// Writes a file into a copy as an environment would, larger than the
+/// Files page writes: the places compare it once they connect.
+fn write_on_disk(p: &Place, copy: &str, path: &str, data: &[u8]) {
+    let at = on_disk(p, copy, path);
+    std::fs::create_dir_all(at.parent().expect("a directory")).expect("the directory");
+    std::fs::write(&at, data).expect("the file");
+}
+
+/// Waits up to secs for f, polling.
+async fn within<T, F, Fut>(secs: u64, what: &str, mut f: F) -> T
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Option<T>>,
+{
+    let start = std::time::Instant::now();
+    loop {
+        if let Some(v) = f().await {
+            return v;
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(secs),
+            "timed out waiting for {what}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// Whether the file at path is data, its size looked at first.
+fn holds(path: &std::path::Path, data: &[u8]) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.len() == data.len() as u64)
+        && std::fs::read(path).is_ok_and(|got| got == data)
+}
+
+/// A file larger than places once held in memory whole, 64 MiB, goes a
+/// piece at a time, read from the file and written as it comes.
+#[tokio::test]
+async fn a_file_over_64_mib_reaches_the_linked_place() {
+    let (Some(a), Some(b)) = (place().await, place().await) else {
+        return;
+    };
+    let (ca, cb) = (profile_copy(&a).await, profile_copy(&b).await);
+    let data = noise(80 << 20, 11);
+    write_on_disk(&a, &ca, "~/.claude/big.bin", &data);
+    link(&a, &b).await;
+    let there = on_disk(&b, &cb, "~/.claude/big.bin");
+    within(60, "b to take the large file", || async {
+        holds(&there, &data).then_some(())
+    })
+    .await;
+}
+
+/// A file that stops coming part way, its sender stopped, comes on from
+/// where it stopped once the sender is back: the receiving place's file
+/// coming in grows on, and no other is started.
+#[tokio::test]
+async fn a_file_that_stopped_coming_comes_on_from_where_it_stopped() {
+    let (Some(mut a), Some(b)) = (place().await, place().await) else {
+        return;
+    };
+    a.client
+        .set_link_settings(&clientapi::types::LinkSettings {
+            bandwidth: 1_500_000,
+        })
+        .await
+        .expect("a limit");
+    let (ca, cb) = (profile_copy(&a).await, profile_copy(&b).await);
+    let data = noise(20 << 20, 12);
+    write_on_disk(&a, &ca, "~/.claude/big.bin", &data);
+    link(&a, &b).await;
+    let incoming = b.server.files_dir().join(".links/incoming");
+    let coming = || {
+        std::fs::read_dir(&incoming)
+            .map(|d| {
+                d.flatten()
+                    .filter_map(|e| Some((e.file_name(), e.metadata().ok()?.len())))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+    let (name, had) = within(30, "the file to start coming", || async {
+        coming().into_iter().find(|(_, len)| *len >= 3 << 20)
+    })
+    .await;
+    a.server.restart_with(&[]);
+    let there = on_disk(&b, &cb, "~/.claude/big.bin");
+    let grew = std::cell::Cell::new(false);
+    within(60, "b to take the rest of the file", || async {
+        for (n, len) in coming() {
+            assert_eq!(n, name, "the file started coming again from its start");
+            grew.set(grew.get() || len > had);
+        }
+        holds(&there, &data).then_some(())
+    })
+    .await;
+    assert!(
+        grew.get(),
+        "what came before the stop was kept and added to"
+    );
+}
+
 /// The copy a person uses of a pack by default follows them: chosen in
 /// one place, it is chosen in the other; put back to their own there, it
 /// is put back here.

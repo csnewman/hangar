@@ -26,7 +26,9 @@ use uuid::Uuid;
 
 use crate::http::App;
 use crate::link::{LEVELS, Place, Refused, Sealed};
-use crate::linkfiles::{Carry, FilePiece, FileVersions, FileWant, Job, MAX_FILE, PIECE};
+use crate::linkfiles::{
+    Body, Carry, FilePiece, FileVersions, FileWant, Job, LEVEL1_MAX_FILE, MAX_FILE, PIECE,
+};
 use crate::linksync::{Exchange, Here, Records, Versions};
 use crate::store::Error as StoreError;
 use crate::store::rows::Link;
@@ -195,6 +197,8 @@ enum Frame {
 struct Wire {
     rx: mpsc::UnboundedReceiver<Frame>,
     tx: mpsc::Sender<Frame>,
+    /// The newest link level both places speak, once they have said.
+    level: u32,
 }
 
 impl Wire {
@@ -255,6 +259,7 @@ impl Wire {
         Wire {
             rx: in_rx,
             tx: out_tx,
+            level: LEVELS[0],
         }
     }
 
@@ -308,6 +313,7 @@ impl Wire {
         Wire {
             rx: in_rx,
             tx: out_tx,
+            level: LEVELS[0],
         }
     }
 
@@ -335,6 +341,20 @@ struct Hello {
 
 fn speaks(levels: [u32; 2]) -> bool {
     levels[1] >= LEVELS[0] && levels[0] <= LEVELS[1]
+}
+
+/// The newest level both places speak, of a place that speaks levels.
+fn agreed(levels: [u32; 2]) -> u32 {
+    levels[1].min(LEVELS[1])
+}
+
+/// The largest file a place speaking level takes.
+fn max_file(level: u32) -> u64 {
+    if level >= 2 {
+        MAX_FILE
+    } else {
+        LEVEL1_MAX_FILE
+    }
 }
 
 /// A refusal's code, as a close says it.
@@ -596,6 +616,7 @@ async fn introduce(
     if !speaks(theirs.levels) {
         return Err(refused("levels"));
     }
+    wire.level = agreed(theirs.levels);
     Ok(Some(wire))
 }
 
@@ -674,6 +695,7 @@ pub async fn accept(app: Arc<App>, socket: axum::extract::ws::WebSocket) {
         wire.send(close("levels")).await;
         return;
     }
+    wire.level = agreed(theirs.levels);
     let Some((held, cmds)) = app.link_conns.take((link.user_id, msg.from), msg.from) else {
         wire.send(close("held")).await;
         return;
@@ -719,14 +741,15 @@ async fn serve(
     let mut exchanged = false;
     record(app, user, other, dialled, exchanged).await;
     let mut recorded = Instant::now();
+    let max = max_file(wire.level);
     let out = outbox(
         app.clone(),
         place.clone(),
         person,
         link.clone(),
         wire.tx.clone(),
+        max,
     );
-    let mut incoming = Incoming::default();
     let c = Conn {
         app,
         place: &place,
@@ -735,6 +758,7 @@ async fn serve(
         link: &link,
         wire: &wire,
         out: &out,
+        max,
     };
     if let Err(e) = offer(&c).await {
         eprintln!("hangar-server: sending to a linked place: {e}");
@@ -757,6 +781,7 @@ async fn serve(
             link: &link,
             wire: &wire,
             out: &out,
+            max,
         };
         tokio::select! {
             f = rx.recv() => match f {
@@ -774,7 +799,7 @@ async fn serve(
                 }
                 Some(Frame::Binary(b)) => {
                     heard = Instant::now();
-                    if let Err(e) = piece(&c, &b, &mut incoming).await {
+                    if let Err(e) = piece(&c, &b).await {
                         eprintln!("hangar-server: a linked place's file: {e}");
                     }
                 }
@@ -831,6 +856,8 @@ struct Conn<'a> {
     link: &'a Link,
     wire: &'a Wire,
     out: &'a Outbox,
+    /// The largest file the other place takes.
+    max: u64,
 }
 
 /// The files a connection is to send, each with when it was asked for.
@@ -852,6 +879,7 @@ fn outbox(
     person: Uuid,
     link: Link,
     tx: mpsc::Sender<Frame>,
+    max: u64,
 ) -> Outbox {
     let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<(Job, Instant)>();
     tokio::spawn(async move {
@@ -887,7 +915,7 @@ fn outbox(
                 continue;
             };
             pacer.read(&app, link.user_id).await;
-            match crate::linkfiles::read(&app, link.user_id, &job, link.place_id).await {
+            match crate::linkfiles::read(&app, link.user_id, &job, link.place_id, max).await {
                 Ok(Some((piece, _)))
                     if piece.content
                         && piece.delta.is_none()
@@ -896,10 +924,10 @@ fn outbox(
                             .is_some_and(|(d, sent)| {
                                 *d == piece.version.digest && asked < *sent
                             }) => {}
-                Ok(Some((piece, data))) => {
+                Ok(Some((piece, body))) => {
                     let sent_whole = (piece.content && piece.delta.is_none())
                         .then(|| piece.version.digest.clone());
-                    match send_file(&place, person, &link, &tx, &mut pacer, piece, &data).await {
+                    match send_file(&place, person, &link, &tx, &mut pacer, piece, body).await {
                         Ok(()) => {
                             if let Some(digest) = sent_whole {
                                 whole.insert(
@@ -965,8 +993,9 @@ impl Pacer {
     }
 }
 
-/// Sends a file in pieces, or its version alone; an empty error when the
-/// connection has ended.
+/// Sends a file in pieces, or its version alone, each piece read from the
+/// file as its turn comes; an empty error when the connection has ended.
+/// A resumed file starts where the other place's holding ends.
 async fn send_file(
     place: &Place,
     person: Uuid,
@@ -974,15 +1003,22 @@ async fn send_file(
     tx: &mpsc::Sender<Frame>,
     pacer: &mut Pacer,
     mut piece: FilePiece,
-    data: &[u8],
+    body: Body,
 ) -> Result<(), String> {
-    let pieces: Vec<&[u8]> = if data.is_empty() {
-        vec![&[]]
-    } else {
-        data.chunks(PIECE).collect()
-    };
-    for (i, bytes) in pieces.into_iter().enumerate() {
-        piece.offset = (i * PIECE) as u64;
+    let total = if piece.content { piece.total() } else { 0 };
+    let mut offset = body.from.min(total);
+    loop {
+        let n = usize::try_from((total - offset).min(PIECE as u64)).unwrap_or(PIECE);
+        let bytes = if n == 0 {
+            vec![]
+        } else {
+            tokio::task::block_in_place(|| body.read(offset, n))
+                .map_err(|e| format!("reading {}: {e}", piece.path))?
+        };
+        if bytes.len() != n {
+            return Err(format!("{} is shorter than its version", piece.path));
+        }
+        piece.offset = offset;
         let frame = Sealed::make_binary(
             place,
             "file",
@@ -990,23 +1026,25 @@ async fn send_file(
             &link.public_key,
             person,
             &piece,
-            bytes,
+            &bytes,
         )?;
         pacer.wait(frame.len()).await;
         if tx.send(Frame::Binary(frame)).await.is_err() {
             return Err(String::new());
         }
+        // The first piece says how the file is made; the rest carry bytes.
+        piece.delta = None;
+        offset += n as u64;
+        if offset >= total {
+            return Ok(());
+        }
     }
-    Ok(())
 }
 
-/// Files coming in, by copy and path, until each is whole.
-#[derive(Default)]
-struct Incoming(HashMap<(String, String), (FilePiece, Vec<u8>)>);
-
-/// Takes a piece of a file the other place sent; once it is whole, the
-/// file. What is taken goes on to the person's other places.
-async fn piece(c: &Conn<'_>, frame: &[u8], incoming: &mut Incoming) -> Result<(), String> {
+/// Takes a piece of a file the other place sent: written to
+/// `.links/incoming/` as it comes, and once the file is whole, taken.
+/// What is taken goes on to the person's other places.
+async fn piece(c: &Conn<'_>, frame: &[u8]) -> Result<(), String> {
     let (msg, body) = Sealed::parse_binary(frame).ok_or("a message that cannot be read")?;
     if msg.from != c.link.place_id || msg.person != c.person {
         return Err("a message from another place, or for another person".into());
@@ -1014,58 +1052,39 @@ async fn piece(c: &Conn<'_>, frame: &[u8], incoming: &mut Incoming) -> Result<()
     let (p, bytes): (FilePiece, Vec<u8>) = msg
         .read_binary(body, c.place, "file", &c.link.public_key)
         .map_err(|r| format!("it could not be read: {r:?}"))?;
-    let whole = if !p.content {
-        Some((p, vec![]))
-    } else if p.version.size > MAX_FILE || p.total() > MAX_FILE {
-        None
-    } else {
-        let key = (p.copy.clone(), p.path.clone());
-        if p.offset == 0 {
-            incoming.0.insert(key.clone(), (p, bytes));
-        } else {
-            match incoming.0.get_mut(&key) {
-                Some((q, data)) if q.version == p.version && data.len() as u64 == p.offset => {
-                    data.extend_from_slice(&bytes);
-                }
-                _ => {
-                    incoming.0.remove(&key);
-                    return Ok(());
-                }
-            }
-        }
-        if incoming
-            .0
-            .get(&key)
-            .is_some_and(|(q, d)| d.len() as u64 >= q.total())
-        {
-            incoming.0.remove(&key)
-        } else {
-            None
-        }
-    };
-    let Some((p, data)) = whole else {
+    let (app, user, from) = (c.app, c.link.user_id, c.link.place_id);
+    if !p.content {
+        return taken(c, &p, None).await;
+    }
+    if p.version.size > MAX_FILE || p.total() > MAX_FILE {
+        return Ok(());
+    }
+    let Some(came) =
+        tokio::task::block_in_place(|| app.link_files.receive(&app.root, user, from, p, &bytes))?
+    else {
         return Ok(());
     };
-    let user = c.link.user_id;
-    let data = if p.delta.is_some() {
-        match crate::linkfiles::rebuild(c.app, user, &p, &data).await? {
-            Some(made) => made,
-            None => {
-                // This place's copy is not the one the delta is from: the
-                // file is asked for whole.
-                let want = FileWant {
-                    want: vec![(p.copy.clone(), p.path.clone())],
-                    bases: vec![],
-                };
-                let msg = sealed(c.place, "file_want", c.person, c.link, &want)?;
-                c.wire.send_sealed(&msg).await;
-                return Ok(());
-            }
-        }
-    } else {
-        data
+    let Some(rel) = crate::linkfiles::rebuild(app, user, &came).await? else {
+        // This place's copy is not the one the delta is from: the file is
+        // asked for whole.
+        let want = FileWant {
+            want: vec![(came.piece.copy.clone(), came.piece.path.clone())],
+            ..FileWant::default()
+        };
+        let msg = sealed(c.place, "file_want", c.person, c.link, &want)?;
+        c.wire.send_sealed(&msg).await;
+        return Ok(());
     };
-    let t = crate::linkfiles::take(c.app, c.place.id, user, &p, &data).await?;
+    let done = taken(c, &came.piece, Some(&rel)).await;
+    let _ = tokio::task::block_in_place(|| app.root.remove(&rel));
+    done
+}
+
+/// Takes a file the other place sent, its content at rel in the files
+/// root (none for its version alone), and answers what taking it found.
+async fn taken(c: &Conn<'_>, p: &FilePiece, rel: Option<&str>) -> Result<(), String> {
+    let user = c.link.user_id;
+    let t = crate::linkfiles::take(c.app, c.place.id, user, c.link.place_id, p, rel).await?;
     for j in t.reply {
         let _ = c.out.send(j);
     }
@@ -1083,7 +1102,7 @@ async fn piece(c: &Conn<'_>, frame: &[u8], incoming: &mut Incoming) -> Result<()
 async fn offer_files(c: &Conn<'_>) -> Result<(), String> {
     let user = c.link.user_id;
     let (versions, found) =
-        crate::linkfiles::versions(c.app, c.place.id, user, c.link.place_id).await?;
+        crate::linkfiles::versions(c.app, c.place.id, user, c.link.place_id, c.max).await?;
     c.app.link_conns.files(user, Some(c.link.place_id), found);
     let msg = sealed(c.place, "file_versions", c.person, c.link, &versions)?;
     c.wire.send_sealed(&msg).await;
@@ -1241,7 +1260,8 @@ async fn answer(c: &Conn<'_>, text: &str) -> Result<bool, String> {
         }
         "file_versions" => {
             let theirs: FileVersions = msg.read(c.place, "file_versions", key).map_err(unread)?;
-            let found = crate::linkfiles::compare(app, c.place.id, user, &theirs).await?;
+            let found =
+                crate::linkfiles::compare(app, c.place.id, user, c.link.place_id, &theirs).await?;
             if !found.want.is_empty() {
                 let msg = sealed(c.place, "file_want", c.person, c.link, &found.want)?;
                 c.wire.send_sealed(&msg).await;
@@ -1256,9 +1276,15 @@ async fn answer(c: &Conn<'_>, text: &str) -> Result<bool, String> {
         "file_want" => {
             let w: FileWant = msg.read(c.place, "file_want", key).map_err(unread)?;
             for (copy, path) in w.want {
-                let send = match w.bases.iter().find(|b| b.copy == copy && b.path == path) {
-                    Some(b) => Carry::Delta(Arc::new(b.clone())),
-                    None => Carry::Whole,
+                let held = w.held.iter().find(|h| h.copy == copy && h.path == path);
+                let base = w.bases.iter().find(|b| b.copy == copy && b.path == path);
+                let send = match (held, base) {
+                    (Some(h), _) => Carry::After {
+                        digest: h.digest.clone(),
+                        from: h.have,
+                    },
+                    (None, Some(b)) => Carry::Delta(Arc::new(b.clone())),
+                    (None, None) => Carry::Whole,
                 };
                 let _ = c.out.send(Job { copy, path, send });
             }
