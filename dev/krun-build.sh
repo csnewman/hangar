@@ -46,7 +46,7 @@
 # Lima VM sees at the same path, and link it through crates/krun/libkrun.
 set -eu
 krunRepo=https://github.com/csnewman/libkrun.git
-krunHangar=5f94cfaf224a1b7d224ad01965b6571524cd57ba
+krunHangar=834e432790aacfa812c03f2befc96c388b490fe9
 repo=$(cd "$(dirname "$0")/.." && pwd)
 if [ "${1:-}" = linux ]; then
     exec limactl shell hangar sh "$repo/dev/krun-build.sh" in-vm "${2:-}"
