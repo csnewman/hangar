@@ -830,7 +830,17 @@ struct Conn<'a> {
     person: Uuid,
     link: &'a Link,
     wire: &'a Wire,
-    out: &'a mpsc::UnboundedSender<Job>,
+    out: &'a Outbox,
+}
+
+/// The files a connection is to send, each with when it was asked for.
+struct Outbox(mpsc::UnboundedSender<(Job, Instant)>);
+
+impl Outbox {
+    /// Asks for a file to be sent; false once the connection has ended.
+    fn send(&self, j: Job) -> bool {
+        self.0.send((j, Instant::now())).is_ok()
+    }
 }
 
 /// Sends files over a connection, a piece at a time, each file read as
@@ -842,21 +852,26 @@ fn outbox(
     person: Uuid,
     link: Link,
     tx: mpsc::Sender<Frame>,
-) -> mpsc::UnboundedSender<Job> {
-    let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<Job>();
+) -> Outbox {
+    let (jobs_tx, mut jobs) = mpsc::unbounded_channel::<(Job, Instant)>();
     tokio::spawn(async move {
-        let mut queue: VecDeque<Job> = VecDeque::new();
+        let mut queue: VecDeque<(Job, Instant)> = VecDeque::new();
         let mut pacer = Pacer::default();
-        // The files sent whole, the version of each and when: a file asked
-        // for twice before it arrived (on taking its version, and on
-        // comparing versions) goes once.
+        // The files sent whole: the version of each, and when its last
+        // piece went. Asked for again before then (on taking its version,
+        // and on comparing versions), the same version is not sent again;
+        // asked for after, it is: the other place does not have it, as
+        // when it could not take a shared copy's file before the copy.
         let mut whole: HashMap<(String, String), (String, Instant)> = HashMap::new();
-        let add = |queue: &mut VecDeque<Job>, j: Job| match queue
+        let add = |queue: &mut VecDeque<(Job, Instant)>, (j, asked): (Job, Instant)| match queue
             .iter_mut()
-            .find(|q| q.copy == j.copy && q.path == j.path)
+            .find(|(q, _)| q.copy == j.copy && q.path == j.path)
         {
-            Some(q) => q.send = q.send.and(j.send),
-            None => queue.push_back(j),
+            Some((q, at)) => {
+                q.send = q.send.and(j.send);
+                *at = (*at).max(asked);
+            }
+            None => queue.push_back((j, asked)),
         };
         loop {
             if queue.is_empty() {
@@ -868,7 +883,7 @@ fn outbox(
             while let Ok(j) = jobs.try_recv() {
                 add(&mut queue, j);
             }
-            let Some(job) = queue.pop_front() else {
+            let Some((job, asked)) = queue.pop_front() else {
                 continue;
             };
             pacer.read(&app, link.user_id).await;
@@ -878,23 +893,25 @@ fn outbox(
                         && piece.delta.is_none()
                         && whole
                             .get(&(job.copy.clone(), job.path.clone()))
-                            .is_some_and(|(d, at)| {
-                                *d == piece.version.digest && at.elapsed() < SENT_WHOLE
+                            .is_some_and(|(d, sent)| {
+                                *d == piece.version.digest && asked < *sent
                             }) => {}
                 Ok(Some((piece, data))) => {
-                    if piece.content && piece.delta.is_none() {
-                        whole.insert(
-                            (job.copy.clone(), job.path.clone()),
-                            (piece.version.digest.clone(), Instant::now()),
-                        );
-                    }
-                    if let Err(e) =
-                        send_file(&place, person, &link, &tx, &mut pacer, piece, &data).await
-                    {
-                        if e.is_empty() {
-                            return;
+                    let sent_whole = (piece.content && piece.delta.is_none())
+                        .then(|| piece.version.digest.clone());
+                    match send_file(&place, person, &link, &tx, &mut pacer, piece, &data).await {
+                        Ok(()) => {
+                            if let Some(digest) = sent_whole {
+                                whole.insert(
+                                    (job.copy.clone(), job.path.clone()),
+                                    (digest, Instant::now()),
+                                );
+                            }
                         }
-                        eprintln!("hangar-server: sending a file to a linked place: {e}");
+                        Err(e) if e.is_empty() => return,
+                        Err(e) => {
+                            eprintln!("hangar-server: sending a file to a linked place: {e}")
+                        }
                     }
                 }
                 Ok(None) => {}
@@ -902,11 +919,8 @@ fn outbox(
             }
         }
     });
-    jobs_tx
+    Outbox(jobs_tx)
 }
-
-/// How long a file sent whole is not sent whole again at the same version.
-const SENT_WHOLE: Duration = Duration::from_secs(60);
 
 /// How often a connection's file sender reads the person's bandwidth
 /// limit again.
