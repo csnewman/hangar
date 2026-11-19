@@ -374,6 +374,10 @@ enum Unreached {
     Failed(String),
 }
 
+/// How long the guest's port forwarder has to answer: it gives up on
+/// connecting to the port itself after 10 seconds.
+const FORWARDER_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Answers the guest's port forwarder gives (crates/agent/src/guestport.rs).
 const CONNECTED: u8 = 0;
 const REFUSED: u8 = 1;
@@ -400,7 +404,14 @@ async fn dial(app: &Shared, worker: Uuid, env: Uuid, port: u16) -> Result<tunnel
     };
     conn.write_all(&port.to_be_bytes()).await.map_err(failed)?;
     let mut answer = [0u8; 1];
-    conn.read_exact(&mut answer).await.map_err(failed)?;
+    tokio::time::timeout(FORWARDER_WITHIN, conn.read_exact(&mut answer))
+        .await
+        .map_err(|_| {
+            Unreached::Failed(format!(
+                "the environment did not say whether it reached its port {port}"
+            ))
+        })?
+        .map_err(failed)?;
     match answer[0] {
         CONNECTED => Ok(conn),
         REFUSED => Err(Unreached::Refused),
