@@ -1,7 +1,7 @@
 //! What the server does now and then on its own: deleting expired
 //! sessions, which are refused whether or not they are deleted, so this
-//! only keeps the store small; and the registry's abandoned uploads and
-//! what nothing keeps.
+//! only keeps the store small; the audit log's events older than it keeps;
+//! and the registry's abandoned uploads and what nothing keeps.
 
 use std::time::Duration;
 
@@ -30,17 +30,24 @@ async fn once(app: &Shared) {
         let now = Utc::now();
         let sessions = tx.prune_sessions(now).await?;
         let hosts = tx.prune_host_sessions(now).await?;
+        let audit = match app.cfg.audit_days {
+            0 => 0,
+            days => {
+                tx.prune_audit_events(now - chrono::Duration::days(days.into()))
+                    .await?
+            }
+        };
         tx.commit().await?;
-        Ok::<_, crate::store::Error>((sessions, hosts))
+        Ok::<_, crate::store::Error>((sessions, hosts, audit))
     };
     match pruned.await {
-        Ok((0, 0)) => {}
-        Ok((sessions, hosts)) => {
+        Ok((0, 0, 0)) => {}
+        Ok((sessions, hosts, audit)) => {
             eprintln!(
-                "hangar-server: pruned {sessions} expired sessions and {hosts} environment host sessions"
+                "hangar-server: pruned {sessions} expired sessions, {hosts} environment host sessions and {audit} audit events"
             )
         }
-        Err(e) => eprintln!("hangar-server: pruning sessions: {e}"),
+        Err(e) => eprintln!("hangar-server: pruning sessions and the audit log: {e}"),
     }
     let Some(blobs) = &app.blobs else {
         return;

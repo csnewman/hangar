@@ -1,6 +1,7 @@
 //! The audit log read back, from either backend: events newest first,
-//! narrowed by the things they concern.
+//! narrowed by the things they concern; and its oldest events let go.
 
+use chrono::{DateTime, Utc};
 use sqlx::Row;
 
 use super::rows::AuditEvent;
@@ -106,5 +107,26 @@ impl Tx {
             })
             .collect()
         }
+    }
+
+    /// Deletes the events before a time, giving how many went: those
+    /// older than the first event at or after it, by ID, which events take
+    /// in the order they happen, so the key alone finds them.
+    pub async fn prune_audit_events(&mut self, before: DateTime<Utc>) -> Result<u64> {
+        const PRUNE: &str = "DELETE FROM audit_events WHERE id < coalesce(
+                (SELECT id FROM audit_events WHERE at >= $1 ORDER BY id LIMIT 1),
+                9223372036854775807)";
+        Ok(match &mut self.inner {
+            Backend::Pg(tx) => sqlx::query(PRUNE)
+                .bind(before)
+                .execute(&mut **tx)
+                .await?
+                .rows_affected(),
+            Backend::Lite(tx) => sqlx::query(PRUNE)
+                .bind(before)
+                .execute(&mut **tx)
+                .await?
+                .rows_affected(),
+        })
     }
 }

@@ -113,6 +113,8 @@ services:
       # Hangar's own container registry, at registry.<HANGAR_PUBLIC_URL's
       # host> (registry-<host> in the prefix style). false turns it off.
       HANGAR_REGISTRY_ENABLED: ${HANGAR_REGISTRY_ENABLED:-true}
+      # How many days of the audit log are kept; 0 keeps all of it.
+      HANGAR_AUDIT_DAYS: ${HANGAR_AUDIT_DAYS:-90}
     volumes:
       # The directory, not the files, so that files replaced by renaming
       # new ones into place are seen.

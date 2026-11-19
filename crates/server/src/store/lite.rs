@@ -1299,6 +1299,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_audit_log_keeps_its_window() {
+        let dir = scratch();
+        let store =
+            super::super::Store::open(&crate::config::Storage::Sqlite(dir.join("state.db")))
+                .await
+                .unwrap();
+        let now = Utc::now();
+        let mut tx = store.begin().await.unwrap();
+        for days in [100, 95, 10, 1] {
+            tx.record(AuditEvent {
+                at: now - chrono::Duration::days(days),
+                ..event()
+            })
+            .await
+            .unwrap();
+        }
+        let cutoff = now - chrono::Duration::days(90);
+        assert_eq!(tx.prune_audit_events(cutoff).await.unwrap(), 2);
+        assert_eq!(tx.prune_audit_events(cutoff).await.unwrap(), 0);
+        let all = now + chrono::Duration::days(1);
+        assert_eq!(tx.prune_audit_events(all).await.unwrap(), 2);
+        tx.commit().await.unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
     async fn a_new_database_has_the_first_rows() {
         let dir = scratch();
         let db = open(&dir.join("state.db")).await.unwrap();

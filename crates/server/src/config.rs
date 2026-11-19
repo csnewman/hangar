@@ -57,6 +57,9 @@ pub struct Config {
     /// other places (docs/places.md §4): unless `HANGAR_PERSONAL_LINKS` is
     /// false.
     pub personal_links: bool,
+    /// How many days of the audit log are kept (`HANGAR_AUDIT_DAYS`, 90
+    /// unless set); 0 keeps all of it.
+    pub audit_days: u32,
 }
 
 /// The administrator made at start when there is none by that name
@@ -497,8 +500,15 @@ impl Config {
             }),
             _ => None,
         };
+        let audit_days = match var("HANGAR_AUDIT_DAYS") {
+            Some(d) => d
+                .parse()
+                .map_err(|_| format!("HANGAR_AUDIT_DAYS is not a number of days: {d}"))?,
+            None => 90,
+        };
         Ok(Config {
             personal_links: var("HANGAR_PERSONAL_LINKS").as_deref() != Some("false"),
+            audit_days,
             edge,
             worker_release,
             auto_sign_in: var("HANGAR_DEV_AUTO_SIGN_IN"),
