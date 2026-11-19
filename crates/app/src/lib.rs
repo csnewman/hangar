@@ -100,5 +100,6 @@ pub mod ui;
 pub mod updown;
 pub mod viewer;
 pub mod wake;
+pub mod webform;
 pub mod workspace;
 pub mod ws;

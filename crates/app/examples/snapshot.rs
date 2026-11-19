@@ -47,6 +47,9 @@
 //! SNAPSHOT_RIGHT_CLICK=X,Y right-clicks there, as the pointer would, and
 //! SNAPSHOT_PRESS="down enter |text| enter" then presses keys, typing what
 //! is between bars, and SNAPSHOT_THEN_CLICK="X,Y;..." clicks after;
+//! SNAPSHOT_PLACE=JSON adds a place for the run (a `PlaceConfig`, such as
+//! one made on a Proxmox, whose This Hangar page SNAPSHOT_SETTINGS=hangar
+//! opens);
 //! SNAPSHOT_STEPS="click X,Y; scroll X,Y,DY; press KEYS; type TEXT; wait S"
 //! runs steps in turn after the clicks: a click, the wheel turned DY
 //! pixels down over a point, keys pressed, text typed, a wait;
@@ -116,6 +119,12 @@ fn main() {
                 });
             }
             let places = places::from_env(cx);
+            if let Ok(json) = std::env::var("SNAPSHOT_PLACE") {
+                match serde_json::from_str::<hangar_app::place::PlaceConfig>(&json) {
+                    Ok(config) => places.update(cx, |p, cx| p.add_for_run(config, cx)),
+                    Err(e) => eprintln!("SNAPSHOT_PLACE: {e}"),
+                }
+            }
             let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
             let mut shell = None;
             let handle = cx
@@ -194,6 +203,15 @@ fn main() {
                             "workers" => Page::Workers(first),
                             "audit" => Page::Audit(first),
                             "browser" => Page::Browser(first),
+                            "hangar" => Page::Hangar(
+                                places
+                                    .read(cx)
+                                    .list()
+                                    .iter()
+                                    .find(|(c, _)| c.proxmox.is_some())
+                                    .map(|(c, _)| c.id.clone())
+                                    .unwrap_or(first),
+                            ),
                             _ => Page::Appearance,
                         };
                         shell.update(cx, |s, cx| s.open_settings(Some(page), window, cx));

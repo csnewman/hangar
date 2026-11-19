@@ -22,6 +22,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-platform-verifier = "0.7"
+rustls-webpki = { version = "0.103", default-features = false, features = ["ring", "std"] }
 serde.workspace = true
 serde_json.workspace = true
 time = "0.3"

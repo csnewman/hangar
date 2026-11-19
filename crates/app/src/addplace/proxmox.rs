@@ -1,7 +1,8 @@
 //! Add a place › Proxmox, as the design draws it: the Proxmox's address and
 //! its certificate matched with the one Proxmox shows, an API token checked
 //! against what a Hangar needs of it, where the Hangar goes, its name and
-//! prefix, then making it (`hangar_proxmox::hangar`): a Hangar of the
+//! prefix, and optionally a host name with the certificate it serves there
+//! (`WebForm`), then making it (`hangar_proxmox::hangar`): a Hangar of the
 //! person's own in a VM there, added as a place with its certificate pinned
 //! and its first access token in the keychain. A Hangar already there is
 //! reconnected instead (`Proxmox::reconnect`), as on a computer that has
@@ -13,12 +14,13 @@ use gpui::{
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{h_flex, v_flex};
-use hangar_proxmox::hangar::{self, Choices, Found, Made, Plan, Proxmox};
+use hangar_proxmox::hangar::{self, Choices, Found, Made, Plan, Proxmox, Web};
 
 use super::{AddPlaceEvent, AddPlaceView, Step, field};
 use crate::palette::Palette;
 use crate::place::ProxmoxPlace;
 use crate::ui::{button, disabled, primary};
+use crate::webform::{WebForm, WebFormEvent};
 
 /// What the Hangar's own VM is: enough for Hangar's server and worker.
 /// Environments are VMs of their own, sized by their templates.
@@ -55,6 +57,10 @@ pub struct Flow {
     done: Vec<String>,
     now: Option<String>,
     making: Option<Task<()>>,
+    /// The host name and certificate it is reached at, if given, and those
+    /// it is being made with.
+    web: Entity<WebForm>,
+    making_web: Option<Web>,
 }
 
 impl Flow {
@@ -71,7 +77,9 @@ impl Flow {
                 .masked(true)
         });
         let prefix = cx.new(|cx| InputState::new(window, cx));
+        let web = cx.new(|cx| WebForm::new(window, cx));
         let subs = vec![
+            cx.subscribe(&web, |_, _, _: &WebFormEvent, cx| cx.notify()),
             cx.subscribe_in(&url, window, |this, _, e: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = e {
                     this.pve_probe(window, cx);
@@ -119,6 +127,8 @@ impl Flow {
             done: vec![],
             now: None,
             making: None,
+            web,
+            making_web: None,
         };
         (flow, subs)
     }
@@ -131,8 +141,14 @@ impl Flow {
         self.choices.as_ref()?.nodes.get(self.node)
     }
 
-    /// Where the Hangar goes, as chosen.
-    fn plan(&self, prefix: &str) -> Option<Plan> {
+    /// The host name and certificate given: none, or one that can be
+    /// served.
+    fn web(&self, cx: &gpui::App) -> Result<Option<Web>, String> {
+        self.web.read(cx).web(cx).transpose()
+    }
+
+    /// Where the Hangar goes, as chosen, and how it is reached.
+    fn plan(&self, prefix: &str, web: Option<Web>) -> Option<Plan> {
         let c = self.choices.as_ref()?;
         let n = c.nodes.get(self.node)?;
         Some(Plan {
@@ -146,6 +162,7 @@ impl Flow {
             cores: CORES,
             memory_mib: MEMORY_MIB,
             data_gib: DATA_GIB,
+            web,
         })
     }
 }
@@ -361,7 +378,7 @@ impl AddPlaceView {
             .choices
             .as_ref()
             .is_some_and(|c| c.needs.iter().all(|n| n.ok))
-            && self.pve.plan("x").is_some()
+            && self.pve.plan("x", None).is_some()
     }
 
     /// Goes to naming it, its name and prefix made from the node's.
@@ -414,9 +431,13 @@ impl AddPlaceView {
     fn pve_make(&mut self, cx: &mut Context<Self>) {
         let prefix = self.pve.prefix.read(cx).value().to_string();
         let name = self.name.read(cx).value().trim().to_string();
-        let Some(plan) = self.pve.plan(&prefix) else {
+        let Ok(web) = self.pve.web(cx) else {
             return;
         };
+        let Some(plan) = self.pve.plan(&prefix, web.clone()) else {
+            return;
+        };
+        self.pve.making_web = web;
         let pve = match Proxmox::new(&self.pve.api, &self.pve.token, &self.pve.fingerprint) {
             Ok(p) => p,
             Err(e) => {
@@ -477,6 +498,7 @@ impl AddPlaceView {
             cores: plan.cores,
             memory_mib: plan.memory_mib,
             data_gib: plan.data_gib,
+            web: None,
         };
         let token = self.pve.token.clone();
         self.pve.making = Some(cx.spawn(async move |this, cx| {
@@ -559,6 +581,7 @@ impl AddPlaceView {
                     &at,
                     release.as_ref(),
                     &admin_name(),
+                    None,
                     &move |s| {
                         let line = step_line(s, &isos, &pool, &prefix, vmid);
                         let _ = say.send_blocking(Made2::Step(line));
@@ -583,7 +606,9 @@ impl AddPlaceView {
             cores: at.cores,
             memory_mib: at.memory_mib,
             data_gib: at.data_gib,
+            web: None,
         };
+        self.pve.making_web = None;
         let name = name_of(&at.prefix);
         let token = self.pve.token.clone();
         self.pve.making = Some(cx.spawn(async move |this, cx| {
@@ -713,9 +738,10 @@ impl AddPlaceView {
                     vmid: made.vmid,
                     ..place.clone()
                 };
-                let r = self
-                    .places
-                    .update(cx, |p, cx| p.add_made(name, &made, place, token, cx));
+                let web = self.pve.making_web.take();
+                let r = self.places.update(cx, |p, cx| {
+                    p.add_made(name, &made, place, token, web.as_ref(), cx)
+                });
                 match r {
                     Ok(id) => cx.emit(AddPlaceEvent::Done(Some(id))),
                     Err(e) => {
@@ -975,7 +1001,7 @@ impl AddPlaceView {
             .iter()
             .map(|(id, vms)| (id.clone(), format!("{vms} VMs")))
             .collect();
-        let ready = self.pve.plan("x").is_some();
+        let ready = self.pve.plan("x", None).is_some();
         v_flex()
             .gap(px(10.))
             .child(self.pve_done_address(p))
@@ -1016,7 +1042,7 @@ impl AddPlaceView {
     }
 
     fn pve_done_where(&self, p: &Palette) -> AnyElement {
-        let plan = self.pve.plan("x").unwrap_or_default();
+        let plan = self.pve.plan("x", None).unwrap_or_default();
         done_step(
             "Placement",
             format!(
@@ -1037,6 +1063,7 @@ impl AddPlaceView {
             .map(|c| c.prefixes.iter().cloned().collect())
             .unwrap_or_default();
         let named = !self.name.read(cx).value().trim().is_empty();
+        let web_ok = self.pve.web(cx).is_ok();
         v_flex()
             .gap(px(10.))
             .child(self.pve_done_address(p))
@@ -1068,7 +1095,9 @@ impl AddPlaceView {
                     )
                     .child(div().text_size(px(11.5)).text_color(p.muted).child(
                         "Environment VMs are sized by their templates.",
-                    )),
+                    ))
+                    .child(div().mt(px(6.)).font_weight(FontWeight::SEMIBOLD).child("Host name"))
+                    .child(self.pve.web.clone()),
             )
             .child(self.error_line(p))
             .child(
@@ -1080,7 +1109,7 @@ impl AddPlaceView {
                             cx.listener(|this, _, _, cx| this.go(Step::ProxmoxWhere, cx)),
                         ),
                     )
-                    .child(if problem.is_none() && named {
+                    .child(if problem.is_none() && named && web_ok {
                         primary("pve-make", "Create", p)
                             .on_click(cx.listener(|this, _, _, cx| this.pve_make(cx)))
                     } else {

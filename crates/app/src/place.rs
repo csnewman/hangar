@@ -52,6 +52,20 @@ pub struct ProxmoxPlace {
     pub memory_mib: u32,
     #[serde(default)]
     pub data_gib: u32,
+    /// The host name it is reached at, how its other hosts are named, and
+    /// the certificate it serves there (its key is in the keychain); none,
+    /// its address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<WebPlace>,
+}
+
+/// A Hangar's host name, host style and certificate, as the app gave them
+/// (`hangar::Web` without its key).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct WebPlace {
+    pub host: String,
+    pub style: String,
+    pub cert: String,
 }
 
 /// How a place's connection is.

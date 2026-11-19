@@ -5,7 +5,8 @@
 //! letting in what it serves, and its settings given through the guest agent
 //! channel, so nothing secret is in the VM's config. Whoever makes it keeps
 //! the Hangar's first access token (the Hangar is given only its hash) and
-//! pins the certificate made for it here.
+//! pins its certificate: one made for its address here, or with a host name
+//! (`Web`), the certificate given for it, which then runs a registry too.
 //!
 //! Several Hangars may share a Proxmox: each names everything it makes after
 //! its prefix (`check_prefix`), and touches nothing else.
@@ -361,6 +362,74 @@ pub struct Plan {
     pub cores: u32,
     pub memory_mib: u32,
     pub data_gib: u32,
+    /// The host name it is reached at, and the certificate it serves there;
+    /// none, its address and a certificate made for it.
+    pub web: Option<Web>,
+}
+
+/// A host name a Hangar is reached at, which its network's DNS answers
+/// for, how its other hosts are named after it, and the certificate it
+/// serves for them all, which its maker was given: a chain and its key,
+/// PEM. In the prefix style the others are siblings of host
+/// (registry-<host>), so a certificate for *.<host's domain> covers them;
+/// in the subdomain style they are under it (registry.<host>).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Web {
+    pub host: String,
+    /// prefix or subdomain.
+    pub style: String,
+    pub cert: String,
+    /// Kept apart from the rest, as a secret.
+    #[serde(skip_serializing, default)]
+    pub key: String,
+}
+
+impl Web {
+    /// The registry's name, as host and the style make it.
+    pub fn registry(&self) -> String {
+        if self.style == "prefix" {
+            format!("registry-{}", self.host)
+        } else {
+            format!("registry.{}", self.host)
+        }
+    }
+
+    /// Whether it can be served: host a DNS name, the style one of the two,
+    /// the key the certificate's, and the certificate valid for host and
+    /// the registry's name. Its certificate's SHA-256, to pin.
+    pub fn check(&self) -> Result<String, String> {
+        use rustls::pki_types::pem::PemObject;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+        if !matches!(self.style.as_str(), "prefix" | "subdomain") {
+            return Err(format!("{:?} is not a host style", self.style));
+        }
+        match ServerName::try_from(self.host.as_str()) {
+            Ok(ServerName::DnsName(_)) if self.host.contains('.') => {}
+            _ => return Err(format!("{:?} is not a host name", self.host)),
+        }
+        let chain: Vec<CertificateDer<'static>> =
+            CertificateDer::pem_slice_iter(self.cert.as_bytes())
+                .collect::<Result<_, _>>()
+                .map_err(|e| format!("The certificate is not PEM: {e:?}"))?;
+        let Some(leaf) = chain.first().cloned() else {
+            return Err("The certificate file holds no certificate.".into());
+        };
+        let key = PrivateKeyDer::from_pem_slice(self.key.as_bytes())
+            .map_err(|e| format!("The key is not a PEM private key: {e:?}"))?;
+        let signer = rustls::crypto::ring::sign::any_supported_type(&key)
+            .map_err(|e| format!("The key is not one HTTPS can use: {e}"))?;
+        rustls::sign::CertifiedKey::new(chain, signer)
+            .keys_match()
+            .map_err(|_| "The key is not the certificate's.".to_string())?;
+        let ee = webpki::EndEntityCert::try_from(&leaf)
+            .map_err(|e| format!("The certificate cannot be read: {e}"))?;
+        for name in [self.host.clone(), self.registry()] {
+            let n = ServerName::try_from(name.clone()).map_err(|e| e.to_string())?;
+            ee.verify_is_valid_for_subject_name(&n)
+                .map_err(|_| format!("The certificate does not cover {name}."))?;
+        }
+        Ok(hangar_hub::tls::fingerprint(&leaf))
+    }
 }
 
 /// A Hangar made on a Proxmox, as whoever made it keeps it: where it is,
@@ -373,7 +442,8 @@ pub struct Made {
     pub pool: String,
     pub prefix: String,
     pub address: Ipv4Addr,
-    /// Its address for people and the app: https://<address>.
+    /// Its address for people and the app: https://<host> with a host
+    /// name, else https://<address>.
     pub url: String,
     /// Its certificate's SHA-256, to pin.
     pub fingerprint: String,
@@ -418,6 +488,7 @@ impl Found {
             cores: self.cores,
             memory_mib: self.memory_mib,
             data_gib: self.data_gib,
+            web: None,
         }
     }
 }
@@ -734,6 +805,9 @@ impl Proxmox {
         let iso = self
             .upload_release(&plan.node, &plan.isos, &plan.prefix, release, progress)
             .await?;
+        if let Some(w) = &plan.web {
+            w.check().map_err(err)?;
+        }
         let (token, token_sha256) = owner_token();
         let id = self.next_id().await?;
         progress(Step::Making { vmid: id });
@@ -745,9 +819,14 @@ impl Proxmox {
                 return Err(e);
             }
         };
-        let url = format!("https://{address}");
+        let url = url_of(plan.web.as_ref(), address);
         progress(Step::Answering { url: url.clone() });
-        healthy(&url, &fingerprint, Duration::from_secs(180)).await?;
+        healthy(
+            &format!("https://{address}"),
+            &fingerprint,
+            Duration::from_secs(180),
+        )
+        .await?;
         Ok(Made {
             node: plan.node.clone(),
             vmid: id,
@@ -921,8 +1000,9 @@ impl Proxmox {
     }
 
     /// Writes a Hangar's settings through its VM's guest agent channel, as
-    /// plan says, with a certificate made for its address and the hash of
-    /// its first administrator's token; the certificate's fingerprint.
+    /// plan says, with its host name and certificate (a certificate made
+    /// for its address without one) and the hash of its first
+    /// administrator's token; the certificate's fingerprint.
     async fn give_settings(
         &self,
         plan: &Plan,
@@ -930,7 +1010,31 @@ impl Proxmox {
         address: Ipv4Addr,
         token_sha256: &str,
     ) -> io::Result<String> {
-        let (cert, key) = web_certificate(address)?;
+        let (own, fingerprint) = match &plan.web {
+            Some(w) => (
+                json!({
+                    "admin": plan.admin,
+                    "admin_token_sha256": token_sha256,
+                    "tls_cert": w.cert,
+                    "tls_key": w.key,
+                    "host": w.host,
+                    "host_style": w.style,
+                }),
+                w.check().map_err(err)?,
+            ),
+            None => {
+                let (cert, key) = web_certificate(address)?;
+                (
+                    json!({
+                        "admin": plan.admin,
+                        "admin_token_sha256": token_sha256,
+                        "tls_cert": pem("CERTIFICATE", &cert),
+                        "tls_key": pem("PRIVATE KEY", &key),
+                    }),
+                    hangar_hub::tls::fingerprint(&cert),
+                )
+            }
+        };
         let settings = json!({
             "node": plan.prefix,
             "proxmox": {
@@ -944,12 +1048,7 @@ impl Proxmox {
                 "pool": plan.pool,
                 "prefix": plan.prefix,
             },
-            "own": {
-                "admin": plan.admin,
-                "admin_token_sha256": token_sha256,
-                "tls_cert": pem("CERTIFICATE", &cert),
-                "tls_key": pem("PRIVATE KEY", &key),
-            },
+            "own": own,
         });
         self.client
             .post(
@@ -960,7 +1059,7 @@ impl Proxmox {
                 ],
             )
             .await?;
-        Ok(hangar_hub::tls::fingerprint(&cert))
+        Ok(fingerprint)
     }
 
     /// The Hangars of their own on this Proxmox, as far as the token sees:
@@ -1039,8 +1138,12 @@ impl Proxmox {
         at: &Found,
         release: Option<&Release>,
         admin: &str,
+        web: Option<&Web>,
         progress: &(dyn Fn(Step) + Send + Sync),
     ) -> io::Result<Made> {
+        if let Some(w) = web {
+            w.check().map_err(err)?;
+        }
         let (node, id) = (at.node.as_str(), at.vmid);
         if !at.running {
             progress(Step::Starting);
@@ -1071,19 +1174,24 @@ impl Proxmox {
         self.agent_ready(node, id).await?;
         progress(Step::Address);
         let address = self.wait_address(node, id).await?;
-        let url = format!("https://{address}");
+        let reached = format!("https://{address}");
         if release.is_some() {
             // Its first start on the release records whom its token went
             // to, which the new settings' token is then given to.
-            responds(&url, Duration::from_secs(180)).await?;
+            responds(&reached, Duration::from_secs(180)).await?;
         }
         let (token, token_sha256) = owner_token();
         progress(Step::Settings);
+        let plan = Plan {
+            web: web.cloned(),
+            ..at.plan(admin)
+        };
         let fingerprint = self
-            .give_settings(&at.plan(admin), id, address, &token_sha256)
+            .give_settings(&plan, id, address, &token_sha256)
             .await?;
+        let url = url_of(web, address);
         progress(Step::Answering { url: url.clone() });
-        healthy(&url, &fingerprint, Duration::from_secs(180)).await?;
+        healthy(&reached, &fingerprint, Duration::from_secs(180)).await?;
         Ok(Made {
             node: at.node.clone(),
             vmid: id,
@@ -1094,6 +1202,55 @@ impl Proxmox {
             url,
             fingerprint,
             token,
+        })
+    }
+
+    /// Gives a Hangar a host name and the certificate it serves there
+    /// (web), or takes it back to its address and a certificate made for
+    /// it (none), keeping its first administrator's token: its settings
+    /// written afresh through its guest agent, which restarts its server.
+    /// The Hangar as it is then.
+    pub async fn set_web(
+        &self,
+        at: &Found,
+        admin: &str,
+        token: &str,
+        web: Option<&Web>,
+        progress: &(dyn Fn(Step) + Send + Sync),
+    ) -> io::Result<Made> {
+        if let Some(w) = web {
+            w.check().map_err(err)?;
+        }
+        let (node, id) = (at.node.as_str(), at.vmid);
+        self.agent_ready(node, id).await?;
+        progress(Step::Address);
+        let address = self.wait_address(node, id).await?;
+        progress(Step::Settings);
+        let plan = Plan {
+            web: web.cloned(),
+            ..at.plan(admin)
+        };
+        let fingerprint = self
+            .give_settings(&plan, id, address, &token_sha256(token))
+            .await?;
+        let url = url_of(web, address);
+        progress(Step::Answering { url: url.clone() });
+        healthy(
+            &format!("https://{address}"),
+            &fingerprint,
+            Duration::from_secs(180),
+        )
+        .await?;
+        Ok(Made {
+            node: at.node.clone(),
+            vmid: id,
+            isos: at.isos.clone(),
+            pool: at.pool.clone(),
+            prefix: at.prefix.clone(),
+            address,
+            url,
+            fingerprint,
+            token: token.to_string(),
         })
     }
 
@@ -1169,6 +1326,12 @@ impl Proxmox {
                 &[("scsi1", cdrom.as_str())],
             )
             .await?;
+        // Asked at its address, which a host name's DNS need not answer
+        // with from here.
+        let reached = match self.address(&at.node, at.vmid).await {
+            Ok(Some(a)) => format!("https://{a}"),
+            _ => at.url.clone(),
+        };
         progress(Step::Restarting);
         self.client
             .post(&self.vm(&at.node, at.vmid, "status/reboot"), &[])
@@ -1176,14 +1339,14 @@ impl Proxmox {
         // The release it ran answers until the VM goes down.
         let down_by = tokio::time::Instant::now() + Duration::from_secs(60);
         while tokio::time::Instant::now() < down_by
-            && health(&at.url, &at.fingerprint).await.is_ok()
+            && health(&reached, &at.fingerprint).await.is_ok()
         {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
         progress(Step::Answering {
             url: at.url.clone(),
         });
-        healthy(&at.url, &at.fingerprint, Duration::from_secs(180)).await
+        healthy(&reached, &at.fingerprint, Duration::from_secs(180)).await
     }
 
     /// Removes a Hangar and everything it made: its own VM first, so its
@@ -1267,6 +1430,24 @@ impl Proxmox {
 /// A new access token for a Hangar's first administrator, as its server
 /// makes them (hgr_ and 32 random bytes), and its SHA-256 in hex, which is
 /// all the Hangar is given.
+/// The SHA-256 of an access token, in hex, as the Hangar is given it.
+fn token_sha256(token: &str) -> String {
+    ring::digest::digest(&ring::digest::SHA256, token.as_bytes())
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// A Hangar's address for people and the app: its host name's, else its
+/// address's.
+fn url_of(web: Option<&Web>, address: Ipv4Addr) -> String {
+    match web {
+        Some(w) => format!("https://{}", w.host),
+        None => format!("https://{address}"),
+    }
+}
+
 fn owner_token() -> (String, String) {
     let mut raw = [0u8; 32];
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut raw)
@@ -1275,11 +1456,7 @@ fn owner_token() -> (String, String) {
         "hgr_{}",
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw)
     );
-    let hash = ring::digest::digest(&ring::digest::SHA256, token.as_bytes())
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+    let hash = token_sha256(&token);
     (token, hash)
 }
 
@@ -1428,5 +1605,64 @@ async fn health_with(url: &str, fingerprint: Option<&str>) -> io::Result<()> {
         Ok(())
     } else {
         Err(err(head.lines().next().unwrap_or("no answer").to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A certificate for names and its key, PEM.
+    fn certificate(names: &[&str]) -> (String, String) {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let p =
+            rcgen::CertificateParams::new(names.iter().map(|n| n.to_string()).collect::<Vec<_>>())
+                .unwrap();
+        (p.self_signed(&key).unwrap().pem(), key.serialize_pem())
+    }
+
+    fn web(host: &str, style: &str, (cert, key): &(String, String)) -> Web {
+        Web {
+            host: host.into(),
+            style: style.into(),
+            cert: cert.clone(),
+            key: key.clone(),
+        }
+    }
+
+    #[test]
+    fn a_wildcard_covers_a_host_and_its_prefix_names() {
+        let c = certificate(&["*.example.test"]);
+        let fp = web("hangar.example.test", "prefix", &c).check().unwrap();
+        assert_eq!(fp.len(), 64);
+        // Under the host, registry.hangar.example.test is two labels below
+        // the wildcard's domain.
+        let e = web("hangar.example.test", "subdomain", &c)
+            .check()
+            .unwrap_err();
+        assert!(e.contains("registry.hangar.example.test"), "{e}");
+        let both = certificate(&["hangar.example.test", "*.hangar.example.test"]);
+        web("hangar.example.test", "subdomain", &both)
+            .check()
+            .unwrap();
+    }
+
+    #[test]
+    fn a_certificate_is_refused_with_another_key_or_name() {
+        let (cert, _) = certificate(&["*.example.test"]);
+        let (_, other) = certificate(&["*.example.test"]);
+        let e = web("hangar.example.test", "prefix", &(cert.clone(), other))
+            .check()
+            .unwrap_err();
+        assert!(e.contains("not the certificate's"), "{e}");
+        let c = certificate(&["*.example.test"]);
+        let e = web("hangar.elsewhere.test", "prefix", &c)
+            .check()
+            .unwrap_err();
+        assert!(e.contains("does not cover hangar.elsewhere.test"), "{e}");
+        for host in ["192.168.1.9", "hangar", ""] {
+            assert!(web(host, "prefix", &c).check().is_err(), "{host}");
+        }
+        assert!(web("hangar.example.test", "sideways", &c).check().is_err());
     }
 }

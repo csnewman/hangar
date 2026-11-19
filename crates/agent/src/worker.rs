@@ -124,9 +124,20 @@ mod role {
         /// the token.
         admin: String,
         admin_token_sha256: String,
-        /// Its HTTPS certificate and key, PEM, which its maker made and pins.
+        /// Its HTTPS certificate (with any chain) and key, PEM: one its
+        /// maker made for its address, or with host, one its maker was
+        /// given that covers host and the names after it, which its maker
+        /// pins either way.
         tls_cert: String,
         tls_key: String,
+        /// The host name it is reached at, which its network's DNS answers
+        /// for; none, its address.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        host: String,
+        /// How its other hosts are named after host (`HANGAR_HOST_STYLE`):
+        /// subdomain (registry.<host>) unless prefix (registry-<host>).
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        host_style: String,
     }
 
     impl Settings {
@@ -497,9 +508,11 @@ mod role {
     /// Readies a Hangar of its own's server: its directory, the secrets it
     /// makes once (its key for secrets at rest, the token its worker
     /// enrols with) and the certificate its maker gave; its environment.
-    /// Its state is a SQLite database (`HANGAR_STATE_FILE`, which imports a
-    /// `state.json` beside it), and its files root the worker's own. Its registry stays off while its address is an IP
-    /// address, as the registry is a host name of its own.
+    /// Its state is a SQLite database (`HANGAR_STATE_FILE`, which imports
+    /// a `state.json` beside it), and its files root the worker's own. It
+    /// is reached at its host name when it has one, with its registry on;
+    /// at its address otherwise, its registry off, as the registry is a
+    /// host name of its own.
     fn configure_server(own: &Own, address: Ipv4Addr) -> io::Result<Vec<(String, String)>> {
         std::fs::create_dir_all(SERVER_DIR)?;
         std::fs::set_permissions(SERVER_DIR, std::fs::Permissions::from_mode(0o700))?;
@@ -519,10 +532,22 @@ mod role {
             own.tls_key.as_bytes(),
         )?;
         let at = |f: &str| dir.join(f).to_string_lossy().into_owned();
+        let named = !own.host.is_empty();
+        let host = if named {
+            own.host.clone()
+        } else {
+            address.to_string()
+        };
+        let style = if own.host_style.is_empty() {
+            "subdomain".to_string()
+        } else {
+            own.host_style.clone()
+        };
         Ok([
             ("HANGAR_STATE_FILE", at("state.db")),
             ("HANGAR_LISTEN", LOCAL_API.to_string()),
-            ("HANGAR_PUBLIC_URL", format!("https://{address}")),
+            ("HANGAR_PUBLIC_URL", format!("https://{host}")),
+            ("HANGAR_HOST_STYLE", style),
             ("HANGAR_TLS_LISTEN", format!(":{HTTPS_PORT}")),
             ("HANGAR_TLS_CERT_FILE", at("tls.crt")),
             ("HANGAR_TLS_KEY_FILE", at("tls.key")),
@@ -530,7 +555,7 @@ mod role {
             ("HANGAR_BOOTSTRAP_TOKEN_FILE", at("bootstrap-token")),
             ("HANGAR_SECRET_KEY_FILE", at("secret-key")),
             ("HANGAR_FILES_DIR", "/data/files".to_string()),
-            ("HANGAR_REGISTRY_ENABLED", "false".to_string()),
+            ("HANGAR_REGISTRY_ENABLED", named.to_string()),
             ("HANGAR_INITIAL_ADMIN_USERNAME", own.admin.clone()),
             (
                 "HANGAR_INITIAL_ADMIN_TOKEN_SHA256",

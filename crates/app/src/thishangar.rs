@@ -1,21 +1,23 @@
 //! Settings › a place › This Hangar, for a Hangar the app made on a
-//! Proxmox: where it runs, its release, which the app moves it on from
-//! (the VM restarts into the new release; its environments carry on), its
-//! web pages and whether this computer's browsers trust its certificate,
-//! reconnecting it when it refuses the app's token, and removing it with
-//! everything it made there.
+//! Proxmox: where it runs, the host name it is reached at with the
+//! certificate it serves there (`WebForm`; with one it runs a registry),
+//! its release, which the app moves it on from (the VM restarts into the
+//! new release; its environments carry on), its web pages and whether this
+//! computer's browsers trust its certificate, reconnecting it when it
+//! refuses the app's token, and removing it with everything it made there.
 
 use gpui::{
-    Context, Entity, FontWeight, IntoElement, ParentElement, Render, Styled, Task, Window, div,
-    prelude::*, px,
+    Context, Entity, FontWeight, IntoElement, ParentElement, Render, Styled, Subscription, Task,
+    Window, div, prelude::*, px,
 };
 use gpui_component::{h_flex, v_flex};
-use hangar_proxmox::hangar::{self, Found, Made, Proxmox};
+use hangar_proxmox::hangar::{self, Found, Made, Proxmox, Web};
 
 use crate::palette::{self, Palette};
 use crate::place::{Connection, PlaceConfig, ProxmoxPlace};
 use crate::places::Places;
 use crate::ui::{button, disabled, primary};
+use crate::webform::{WebForm, WebFormEvent};
 
 /// What the page is doing, or did.
 #[derive(Debug, Clone, PartialEq)]
@@ -24,6 +26,8 @@ enum Doing {
     Upgrading,
     Upgraded(String),
     Reconnecting,
+    /// Giving it a host name, or taking it back to its address.
+    SettingWeb,
     /// Removing asked about, waiting for Yes.
     AskingRemove,
     Removing,
@@ -50,20 +54,36 @@ pub struct ThisHangarView {
     looking: bool,
     trusting: bool,
     trust_work: Option<Task<()>>,
+    /// Which action the steps are of, so each section shows its own.
+    steps_of: Doing,
+    /// The host name and certificate being given, while asked for.
+    web_form: Entity<WebForm>,
+    editing_web: bool,
+    _subs: Vec<Subscription>,
 }
 
 /// What an upgrade says as it goes.
 enum Up {
     Step(String),
     Done(String),
-    Reconnected(Box<(Made, Found)>),
+    /// Its settings written afresh, by reconnecting or for a host name:
+    /// the Hangar as it is then, the host name it was given, and what to
+    /// say of it.
+    Kept(Box<(Made, Found, Option<Web>, &'static str)>),
     Failed(String),
 }
 
 const CHECKING: &str = "Checking version";
 
 impl ThisHangarView {
-    pub fn new(places: Entity<Places>, place: &str, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        places: Entity<Places>,
+        place: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let web_form = cx.new(|cx| WebForm::new(window, cx));
+        let subs = vec![cx.subscribe(&web_form, |_, _, _: &WebFormEvent, cx| cx.notify())];
         let mut v = ThisHangarView {
             places,
             place: place.to_string(),
@@ -79,6 +99,10 @@ impl ThisHangarView {
             looking: false,
             trusting: false,
             trust_work: None,
+            steps_of: Doing::Nothing,
+            web_form,
+            editing_web: false,
+            _subs: subs,
         };
         v.look(cx);
         v.look_trust(cx);
@@ -179,7 +203,9 @@ impl ThisHangarView {
             cx.notify();
             return;
         };
+        let web = self.places.read(cx).web(&self.place);
         self.doing = Doing::Reconnecting;
+        self.steps_of = Doing::Reconnecting;
         self.error = None;
         self.done.clear();
         self.now = Some("Finding the VM".into());
@@ -241,6 +267,7 @@ impl ThisHangarView {
                 &at,
                 release.as_ref(),
                 &crate::addplace::proxmox::admin_name(),
+                web.as_ref(),
                 &move |s| {
                     let line = match s {
                         hangar::Step::Uploading { name } => format!("Uploading {name} to {isos}"),
@@ -260,8 +287,77 @@ impl ThisHangarView {
                 },
             ));
             let _ = tx.send_blocking(match r {
-                Ok(m) => Up::Reconnected(Box::new((m, at))),
+                Ok(m) => Up::Kept(Box::new((m, at, web, "Reconnected"))),
                 Err(e) => Up::Failed(format!("Could not reconnect: {e}")),
+            });
+        });
+        self.work = Some(self.follow(rx, work, cx));
+    }
+
+    /// Gives the Hangar the host name and certificate given (web), or
+    /// takes it back to its address (none), through Proxmox, keeping its
+    /// access token, each step said as it goes.
+    fn set_web(&mut self, web: Option<Web>, cx: &mut Context<Self>) {
+        let Some((_, pve, made)) = self.made(cx) else {
+            self.error = Some("No Proxmox token is stored for this place.".into());
+            cx.notify();
+            return;
+        };
+        let Some(token) = self.places.read(cx).token(&self.place) else {
+            self.error = Some("No access token is stored for this place.".into());
+            cx.notify();
+            return;
+        };
+        self.doing = Doing::SettingWeb;
+        self.steps_of = Doing::SettingWeb;
+        self.editing_web = false;
+        self.error = None;
+        self.done.clear();
+        self.now = Some("Finding the VM".into());
+        cx.notify();
+        let (tx, rx) = async_channel::unbounded::<Up>();
+        let work = cx.background_spawn(async move {
+            let found = match crate::api::runtime().block_on(pve.hangars()) {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = tx.send_blocking(Up::Failed(format!("Could not reach Proxmox: {e}")));
+                    return;
+                }
+            };
+            let Some(at) = found
+                .into_iter()
+                .find(|f| f.vmid == made.vmid && f.prefix == made.prefix)
+            else {
+                let _ = tx.send_blocking(Up::Failed(format!(
+                    "VM {} ({}-hangar) was not found on the Proxmox.",
+                    made.vmid, made.prefix
+                )));
+                return;
+            };
+            let say = tx.clone();
+            let r = crate::api::runtime().block_on(pve.set_web(
+                &at,
+                &crate::addplace::proxmox::admin_name(),
+                &token,
+                web.as_ref(),
+                &move |s| {
+                    let line = match s {
+                        hangar::Step::Address => "Waiting for IP address".into(),
+                        hangar::Step::Settings => "Applying host name and certificate".into(),
+                        hangar::Step::Answering { url } => format!("Waiting for {url}"),
+                        _ => String::new(),
+                    };
+                    let _ = say.send_blocking(Up::Step(line));
+                },
+            ));
+            let said = if web.is_some() {
+                "Host name set"
+            } else {
+                "Reached at its address"
+            };
+            let _ = tx.send_blocking(match r {
+                Ok(m) => Up::Kept(Box::new((m, at, web, said))),
+                Err(e) => Up::Failed(format!("Could not change the host name: {e}")),
             });
         });
         self.work = Some(self.follow(rx, work, cx));
@@ -277,7 +373,7 @@ impl ThisHangarView {
         cx.spawn(async move |this, cx| {
             let _work = work;
             while let Ok(m) = rx.recv().await {
-                let over = matches!(m, Up::Done(_) | Up::Reconnected(_) | Up::Failed(_));
+                let over = matches!(m, Up::Done(_) | Up::Kept(_) | Up::Failed(_));
                 let _ = this.update(cx, |v, cx| {
                     let finished = v.now.take();
                     match m {
@@ -294,10 +390,10 @@ impl ThisHangarView {
                             v.doing = Doing::Upgraded(version);
                             v.look(cx);
                         }
-                        Up::Reconnected(b) => {
-                            let (made, at) = *b;
+                        Up::Kept(b) => {
+                            let (made, at, web, said) = *b;
                             v.done.extend(finished);
-                            v.reconnected(made, at, cx);
+                            v.kept(made, at, web, said, cx);
                         }
                         Up::Failed(e) => {
                             v.doing = Doing::Nothing;
@@ -313,9 +409,16 @@ impl ThisHangarView {
         })
     }
 
-    /// Keeps the place as reconnecting left it: its new token and pin, and
-    /// its address, should it have moved.
-    fn reconnected(&mut self, made: Made, at: Found, cx: &mut Context<Self>) {
+    /// Keeps the place as its settings were written: its token and pin, its
+    /// host name, and its address, should it have moved.
+    fn kept(
+        &mut self,
+        made: Made,
+        at: Found,
+        web: Option<Web>,
+        said: &str,
+        cx: &mut Context<Self>,
+    ) {
         let places = self.places.read(cx);
         let Some((config, _)) = places.get(&self.place) else {
             return;
@@ -327,9 +430,9 @@ impl ThisHangarView {
         let token = places.proxmox_token(&self.place).unwrap_or_default();
         place.vmid = at.vmid;
         let old = self.place.clone();
-        let r = self
-            .places
-            .update(cx, |p, cx| p.add_made(&name, &made, place, &token, cx));
+        let r = self.places.update(cx, |p, cx| {
+            p.add_made(&name, &made, place, &token, web.as_ref(), cx)
+        });
         self.doing = Doing::Nothing;
         match r {
             Ok(id) => {
@@ -337,7 +440,7 @@ impl ThisHangarView {
                     self.places.update(cx, |p, cx| p.forget(&old, cx));
                     self.place = id;
                 }
-                self.done.push("Reconnected".into());
+                self.done.push(said.to_string());
                 self.look(cx);
                 self.look_trust(cx);
             }
@@ -415,6 +518,7 @@ impl ThisHangarView {
             return;
         };
         self.doing = Doing::Upgrading;
+        self.steps_of = Doing::Upgrading;
         self.error = None;
         self.done.clear();
         self.now = Some("Downloading release".into());
@@ -662,7 +766,9 @@ impl Render for ThisHangarView {
                                 ))
                                 .when(reconnecting, |d| d.child(steps(&done, &now, &p))),
                         )
-                        .child(if reconnecting || self.doing == Doing::Removing {
+                        .child(if reconnecting
+                            || matches!(self.doing, Doing::Removing | Doing::SettingWeb)
+                        {
                             disabled("hangar-reconnect", "Reconnect", &p)
                         } else {
                             primary("hangar-reconnect", "Reconnect", &p)
@@ -684,6 +790,8 @@ impl Render for ThisHangarView {
             .child(row("ISO storage", at.isos.clone(), &p))
             .when(!at.network.is_empty(), |d| d.child(row("Network", at.network.clone(), &p)))
             .child(row("Pool", at.pool.clone(), &p))
+            .child(section("Host Name", &p))
+            .child(self.host_name(&at, &done, &now, &p, cx))
             .child(section("Web Access", &p))
             .child(web_row)
             .child(trust_row)
@@ -713,14 +821,17 @@ impl Render for ThisHangarView {
                             .child(div().text_size(px(11.)).text_color(p.muted).child(
                                 "The VM restarts during an upgrade; environments keep running. If the new version fails to start, the previous version is restored.",
                             ))
-                            .when(!reconnecting && (!done.is_empty() || now.is_some()), |d| {
-                                d.child(steps(&done, &now, &p))
-                            }),
+                            .when(
+                                self.steps_of == Doing::Upgrading
+                                    && (!done.is_empty() || now.is_some()),
+                                |d| d.child(steps(&done, &now, &p)),
+                            ),
                     )
                     .child(match self.doing {
-                        Doing::Upgrading | Doing::Removing | Doing::Reconnecting => {
-                            disabled("hangar-upgrade", "Upgrade", &p)
-                        }
+                        Doing::Upgrading
+                        | Doing::Removing
+                        | Doing::Reconnecting
+                        | Doing::SettingWeb => disabled("hangar-upgrade", "Upgrade", &p),
                         _ if newer => primary("hangar-upgrade", "Upgrade", &p)
                             .on_click(cx.listener(|this, _, _, cx| this.upgrade(cx))),
                         _ => button("hangar-upgrade", "Reinstall", &p)
@@ -800,6 +911,135 @@ impl Render for ThisHangarView {
             .when_some(self.error.clone(), |d, e| {
                 d.child(div().text_color(p.bad).child(e))
             })
+    }
+}
+
+impl ThisHangarView {
+    /// The host name it is reached at and its registry's, or that it is
+    /// reached at its address and has none; giving it one, replacing its
+    /// certificate, or taking it back to its address.
+    fn host_name(
+        &self,
+        at: &ProxmoxPlace,
+        done: &[String],
+        now: &Option<String>,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let setting = self.doing == Doing::SettingWeb;
+        let idle = matches!(self.doing, Doing::Nothing | Doing::Upgraded(_));
+        let web = at.web.clone();
+        let line = |k: &str, v: String| {
+            h_flex()
+                .max_w(px(560.))
+                .gap(px(8.))
+                .child(div().flex_none().text_color(p.muted).child(k.to_string()))
+                .child(
+                    div().flex_1().min_w_0().flex().justify_end().child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(v),
+                    ),
+                )
+        };
+        let open = |label: &'static str, id: &'static str, web: Option<crate::place::WebPlace>| {
+            button(id, label, p).on_click(cx.listener(move |this, _, window, cx| {
+                if let Some(w) = &web {
+                    this.web_form
+                        .update(cx, |f, cx| f.set(&w.host, &w.style, window, cx));
+                }
+                this.editing_web = true;
+                this.error = None;
+                cx.notify();
+            }))
+        };
+        let can_apply = matches!(self.web_form.read(cx).web(cx), Some(Ok(_)));
+        v_flex()
+            .gap(px(6.))
+            .child(match &web {
+                Some(w) => line("Host name", w.host.clone()),
+                None => line("Host name", "None · reached at its address".into()),
+            })
+            .when_some(web.clone(), |d, w| {
+                let registry = hangar::Web {
+                    host: w.host.clone(),
+                    style: w.style.clone(),
+                    ..Default::default()
+                }
+                .registry();
+                d.child(line("Registry", registry))
+            })
+            .when(web.is_none(), |d| {
+                d.child(div().max_w(px(560.)).text_size(px(11.)).text_color(p.muted).child(
+                    "With a host name the Hangar is reached by name and runs a registry. Give it a certificate that covers the name, such as one for *.<your domain>; your DNS points the names at the Hangar's address.",
+                ))
+            })
+            .when(!self.editing_web && !setting, |d| {
+                d.child(
+                    h_flex()
+                        .gap(px(8.))
+                        .when(idle, |d| match &web {
+                            Some(_) => d
+                                .child(open("Replace Certificate…", "hangar-web-replace", web.clone()))
+                                .child(
+                                    button("hangar-web-off", "Use Its Address", p).on_click(
+                                        cx.listener(|this, _, _, cx| this.set_web(None, cx)),
+                                    ),
+                                ),
+                            None => d.child(open("Set Host Name…", "hangar-web-set", None)),
+                        }),
+                )
+            })
+            .when(self.editing_web, |d| {
+                d.child(
+                    v_flex()
+                        .max_w(px(560.))
+                        .gap(px(8.))
+                        .p(px(10.))
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(p.border)
+                        .child(self.web_form.clone())
+                        .child(
+                            h_flex()
+                                .gap(px(8.))
+                                .justify_end()
+                                .child(button("hangar-web-cancel", "Cancel", p).on_click(
+                                    cx.listener(|this, _, _, cx| {
+                                        this.editing_web = false;
+                                        cx.notify();
+                                    }),
+                                ))
+                                .child(if can_apply && idle {
+                                    primary("hangar-web-apply", "Apply", p).on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            if let Some(Ok(w)) = this.web_form.read(cx).web(cx) {
+                                                this.set_web(Some(w), cx);
+                                            }
+                                        },
+                                    ))
+                                } else {
+                                    disabled("hangar-web-apply", "Apply", p)
+                                }),
+                        ),
+                )
+            })
+            .when(
+                self.steps_of == Doing::SettingWeb && (!done.is_empty() || now.is_some()),
+                |d| {
+                    d.child(
+                        v_flex()
+                            .gap(px(2.))
+                            .text_size(px(11.5))
+                            .children(done.iter().map(|l| div().child(format!("✓ {l}"))))
+                            .when_some(now.clone(), |d, n| {
+                                d.child(div().text_color(p.muted).child(format!("◌ {n}")))
+                            }),
+                    )
+                },
+            )
     }
 }
 

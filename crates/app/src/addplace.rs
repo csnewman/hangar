@@ -625,7 +625,7 @@ impl AddPlaceView {
     }
 }
 
-fn field(label: &str, p: &Palette) -> gpui::Div {
+pub(crate) fn field(label: &str, p: &Palette) -> gpui::Div {
     v_flex().gap(px(4.)).child(
         div()
             .text_size(px(11.5))

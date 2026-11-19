@@ -90,6 +90,14 @@ impl Places {
         p
     }
 
+    /// Adds a place for this run alone, kept out of the list: one a
+    /// snapshot draws.
+    pub fn add_for_run(&mut self, config: PlaceConfig, cx: &mut Context<Self>) {
+        self.transient.push(config.id.clone());
+        self.add_listed(config);
+        cx.notify();
+    }
+
     fn add_listed(&mut self, config: PlaceConfig) {
         let state = self
             .dirs
@@ -248,18 +256,34 @@ impl Places {
 
     /// Adds a Hangar the app made on a Proxmox, signed in with its first
     /// administrator's token, its certificate pinned; the Proxmox token it
-    /// was made with kept beside that token, to upgrade and remove it.
+    /// was made with kept beside that token, to upgrade and remove it, and
+    /// its host name's certificate's key, should it have one.
     pub fn add_made(
         &mut self,
         name: &str,
         made: &hangar_proxmox::hangar::Made,
-        proxmox: ProxmoxPlace,
+        mut proxmox: ProxmoxPlace,
         proxmox_token: &str,
+        web: Option<&hangar_proxmox::hangar::Web>,
         cx: &mut Context<Self>,
     ) -> Result<String, String> {
         let id = store::place_id(&made.url);
         self.tokens.set(&id, &made.token)?;
         self.tokens.set(&proxmox_token_key(&id), proxmox_token)?;
+        proxmox.web = match web {
+            Some(w) => {
+                self.tokens.set(&web_key_key(&id), &w.key)?;
+                Some(crate::place::WebPlace {
+                    host: w.host.clone(),
+                    style: w.style.clone(),
+                    cert: w.cert.clone(),
+                })
+            }
+            None => {
+                self.tokens.delete(&web_key_key(&id));
+                None
+            }
+        };
         let config = PlaceConfig {
             id: id.clone(),
             name: name.trim().to_string(),
@@ -291,9 +315,27 @@ impl Places {
         self.arrange(&keep, cx);
     }
 
+    /// The access token the app signs in to a place with.
+    pub fn token(&self, id: &str) -> Option<String> {
+        self.tokens.get(id)
+    }
+
     /// The Proxmox token a place the app made there was made with.
     pub fn proxmox_token(&self, id: &str) -> Option<String> {
         self.tokens.get(&proxmox_token_key(id))
+    }
+
+    /// The host name a Hangar the app made is reached at, with the
+    /// certificate and key it serves there, as the app gave them.
+    pub fn web(&self, id: &str) -> Option<hangar_proxmox::hangar::Web> {
+        let (config, _) = self.get(id)?;
+        let w = config.proxmox.as_ref()?.web.clone()?;
+        Some(hangar_proxmox::hangar::Web {
+            host: w.host,
+            style: w.style,
+            cert: w.cert,
+            key: self.tokens.get(&web_key_key(id))?,
+        })
     }
 
     /// Names a place as the user would have it.
@@ -322,6 +364,7 @@ impl Places {
         for id in &gone {
             self.tokens.delete(id);
             self.tokens.delete(&proxmox_token_key(id));
+            self.tokens.delete(&web_key_key(id));
             if let Some(d) = &self.dirs {
                 PlaceState::forget(&d.cache, id);
             }
@@ -529,6 +572,10 @@ pub fn from_env(cx: &mut App) -> Entity<Places> {
 /// Where a place's Proxmox token is kept, beside its own.
 fn proxmox_token_key(id: &str) -> String {
     format!("{id}#proxmox")
+}
+
+fn web_key_key(id: &str) -> String {
+    format!("{id}#web")
 }
 
 /// Tokens from the first store that has them, set in the second.

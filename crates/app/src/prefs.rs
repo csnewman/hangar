@@ -577,12 +577,17 @@ impl SettingsView {
         Some(view)
     }
 
-    fn hangar(&mut self, place: &str, cx: &mut Context<Self>) -> Entity<ThisHangarView> {
+    fn hangar(
+        &mut self,
+        place: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ThisHangarView> {
         if let Some((_, v)) = self.hangars.iter().find(|(p, _)| p == place) {
             return v.clone();
         }
         let places = self.places.clone();
-        let view = cx.new(|cx| ThisHangarView::new(places, place, cx));
+        let view = cx.new(|cx| ThisHangarView::new(places, place, window, cx));
         self.hangars.push((place.to_string(), view.clone()));
         view
     }
@@ -895,7 +900,7 @@ impl SettingsView {
             Page::Packs => self.sync_packs(cx).into_any_element(),
             Page::SyncTemplates => self.sync_templates(cx).into_any_element(),
             Page::Account(id) => self.account(&id, window, cx).into_any_element(),
-            Page::Hangar(id) => self.hangar(&id, cx).into_any_element(),
+            Page::Hangar(id) => self.hangar(&id, window, cx).into_any_element(),
             Page::Browser(id) => self.browser(&id, p, cx).into_any_element(),
             page => match self.place_view(page, cx) {
                 Some(v) => v.into_any_element(),

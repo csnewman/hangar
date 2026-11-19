@@ -3,22 +3,30 @@
 //!
 //!   hangar probe URL
 //!   hangar choices URL TOKEN_FILE FINGERPRINT
-//!   hangar make URL TOKEN_FILE FINGERPRINT DIR node=… disks=… isos=… network=… pool=… prefix=… [admin=… cores=… memory=… data=… release=IMAGE]
+//!   hangar make URL TOKEN_FILE FINGERPRINT DIR node=… disks=… isos=… network=… pool=… prefix=… [admin=… cores=… memory=… data=… release=IMAGE] [WEB]
 //!   hangar upgrade URL TOKEN_FILE FINGERPRINT DIR [release=IMAGE]
 //!   hangar remove URL TOKEN_FILE FINGERPRINT DIR
 //!   hangar hangars URL TOKEN_FILE FINGERPRINT
-//!   hangar reconnect URL TOKEN_FILE FINGERPRINT DIR prefix=… [admin=… release=IMAGE]
+//!   hangar reconnect URL TOKEN_FILE FINGERPRINT DIR prefix=… [admin=… release=IMAGE] [WEB]
+//!   hangar domain URL TOKEN_FILE FINGERPRINT DIR prefix=… [admin=…] [WEB]
 //!
 //! TOKEN_FILE holds the Proxmox API token (USER@REALM!ID=SECRET). make and
 //! reconnect keep what they made in DIR: made.json, and the Hangar's first
 //! access token in owner-token (0600), neither printed. reconnect moves the
 //! Hangar to the release first unless it boots it already.
+//!
+//! WEB is host=… style=prefix|subdomain cert=FILE key=FILE: the host name
+//! the Hangar is reached at and the certificate (PEM, with its chain) and
+//! key it serves, which cover host and registry-<host> (prefix) or
+//! registry.<host> (subdomain); without it the Hangar is reached at its
+//! address. domain sets it on a Hangar made already, or takes it back to
+//! its address without it, keeping its token.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::ExitCode;
 
-use hangar_proxmox::hangar::{self, Made, Plan, Proxmox, RELEASE_ISO_IMAGE};
+use hangar_proxmox::hangar::{self, Made, Plan, Proxmox, RELEASE_ISO_IMAGE, Web};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -36,6 +44,23 @@ async fn run(args: &[String]) -> Result<(), String> {
     let e = |e: std::io::Error| e.to_string();
     let kv: HashMap<&str, &str> = args.iter().filter_map(|a| a.split_once('=')).collect();
     let get = |k: &str, d: &'static str| kv.get(k).copied().unwrap_or(d).to_string();
+    let web = || -> Result<Option<Web>, String> {
+        let Some(host) = kv.get("host") else {
+            return Ok(None);
+        };
+        let read = |k: &str| {
+            std::fs::read_to_string(kv.get(k).ok_or(format!("host needs {k}=FILE"))?)
+                .map_err(|e| format!("{k}: {e}"))
+        };
+        let w = Web {
+            host: host.to_string(),
+            style: get("style", "prefix"),
+            cert: read("cert")?,
+            key: read("key")?,
+        };
+        w.check()?;
+        Ok(Some(w))
+    };
     let connect = || -> Result<Proxmox, String> {
         let token = std::fs::read_to_string(args.get(2).ok_or("no TOKEN_FILE")?)
             .map_err(|e| format!("the token file: {e}"))?;
@@ -69,6 +94,7 @@ async fn run(args: &[String]) -> Result<(), String> {
                 cores: get("cores", "2").parse().map_err(|_| "cores")?,
                 memory_mib: get("memory", "2048").parse().map_err(|_| "memory")?,
                 data_gib: get("data", "64").parse().map_err(|_| "data")?,
+                web: web()?,
             };
             let release = fetch(dir, &get("release", ""))?;
             let t0 = std::time::Instant::now();
@@ -129,9 +155,15 @@ async fn run(args: &[String]) -> Result<(), String> {
             };
             let t0 = std::time::Instant::now();
             let made = pve
-                .reconnect(at, release.as_ref(), &get("admin", "owner"), &|s| {
-                    eprintln!("{:6.1} s  {s:?}", t0.elapsed().as_secs_f64());
-                })
+                .reconnect(
+                    at,
+                    release.as_ref(),
+                    &get("admin", "owner"),
+                    web()?.as_ref(),
+                    &|s| {
+                        eprintln!("{:6.1} s  {s:?}", t0.elapsed().as_secs_f64());
+                    },
+                )
                 .await
                 .map_err(e)?;
             keep(dir, &made)?;
@@ -142,9 +174,34 @@ async fn run(args: &[String]) -> Result<(), String> {
                 t0.elapsed().as_secs_f64()
             );
         }
+        Some("domain") => {
+            let pve = connect()?;
+            let dir = Path::new(args.get(4).ok_or("no DIR")?);
+            let token = kept(dir)?.token;
+            let prefix = get("prefix", "");
+            let found = pve.hangars().await.map_err(e)?;
+            let at = found
+                .iter()
+                .find(|f| f.prefix == prefix)
+                .ok_or(format!("no Hangar with prefix {prefix:?} here"))?;
+            let t0 = std::time::Instant::now();
+            let made = pve
+                .set_web(at, &get("admin", "owner"), &token, web()?.as_ref(), &|s| {
+                    eprintln!("{:6.1} s  {s:?}", t0.elapsed().as_secs_f64());
+                })
+                .await
+                .map_err(e)?;
+            keep(dir, &made)?;
+            println!(
+                "VM {} at {} in {:.1} s",
+                made.vmid,
+                made.url,
+                t0.elapsed().as_secs_f64()
+            );
+        }
         _ => {
             return Err(
-                "probe, choices, make, upgrade, remove, hangars or reconnect: see the source's head"
+                "probe, choices, make, upgrade, remove, hangars, reconnect or domain: see the source's head"
                     .into(),
             );
         }
