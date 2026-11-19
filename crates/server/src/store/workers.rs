@@ -3,7 +3,6 @@
 
 use chrono::{DateTime, Utc};
 use sqlx::Row;
-use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
 use super::rows::{Environment, EnvironmentRemoval, ImageRemoval, Worker};
@@ -17,7 +16,14 @@ pub const ENVIRONMENT_COLUMNS: &str = "id, short_id, owner_id, name, template_id
      image_rollback, ports_public, cpus, memory_mib, desired, worker_id, phase, reason, stats, progress, \
      guest_agent, revision, changed_by::text AS changed_by, created_at, updated_at";
 
-pub(super) fn worker(r: &PgRow) -> Result<Worker> {
+/// ENVIRONMENT_COLUMNS in SQLite, which keeps no transaction an
+/// environment changed in (its readers' marks are revisions).
+pub const LITE_ENVIRONMENT_COLUMNS: &str = "id, short_id, owner_id, name, template_id, template_name, \
+     template_revision, spec, image, image_digest, image_pin_want, image_drop_rollback, image_update, \
+     image_rollback, ports_public, cpus, memory_mib, desired, worker_id, phase, reason, stats, progress, \
+     guest_agent, revision, NULL AS changed_by, created_at, updated_at";
+
+pub(super) fn worker(r: &impl super::Get) -> Result<Worker> {
     Ok(Worker {
         id: r.try_get("id")?,
         name: r.try_get("name")?,
@@ -39,7 +45,7 @@ pub(super) fn worker(r: &PgRow) -> Result<Worker> {
     })
 }
 
-pub fn environment(r: &PgRow) -> Result<Environment> {
+pub fn environment(r: &impl super::Get) -> Result<Environment> {
     Ok(Environment {
         id: r.try_get("id")?,
         short_id: r.try_get("short_id")?,
@@ -118,12 +124,35 @@ impl Tx {
                     Err(e) => Err(e.into()),
                 }
             }
-            Backend::Json(tx) => {
-                if tx.work.workers.iter().any(|x| x.name == w.name) {
-                    return Ok(false);
+            Backend::Lite(tx) => {
+                let r = sqlx::query(&format!(
+                    "INSERT INTO workers ({WORKER_COLUMNS})
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)"
+                ))
+                .bind(w.id)
+                .bind(&w.name)
+                .bind(&w.credential_hash)
+                .bind(&w.labels)
+                .bind(w.cpus)
+                .bind(w.memory_mib)
+                .bind(&w.unknown)
+                .bind(&w.stats)
+                .bind(&w.images)
+                .bind(&w.gpu)
+                .bind(w.desired_version)
+                .bind(w.last_seen_at)
+                .bind(w.revoked_at)
+                .bind(w.created_at)
+                .bind(&w.monitor)
+                .bind(&w.version)
+                .bind(sqlx::types::Json(&w.features))
+                .execute(&mut **tx)
+                .await;
+                match r {
+                    Ok(_) => Ok(true),
+                    Err(sqlx::Error::Database(e)) if e.is_unique_violation() => Ok(false),
+                    Err(e) => Err(e.into()),
                 }
-                tx.work.workers.push(w.clone());
-                Ok(true)
             }
         }
     }
@@ -137,12 +166,12 @@ impl Tx {
             .bind(id)
             .fetch_optional(&mut **tx)
             .await?),
-            Backend::Json(tx) => Ok(tx
-                .work
-                .workers
-                .iter()
-                .find(|w| w.id == id && w.revoked_at.is_none())
-                .map(|w| w.credential_hash.clone())),
+            Backend::Lite(tx) => Ok(sqlx::query_scalar(
+                "SELECT credential_hash FROM workers WHERE id = $1 AND revoked_at IS NULL",
+            )
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?),
         }
     }
 
@@ -156,10 +185,12 @@ impl Tx {
                     .execute(&mut **tx)
                     .await?;
             }
-            Backend::Json(tx) => {
-                for w in tx.work.workers.iter_mut().filter(|w| w.id == id) {
-                    w.last_seen_at = Some(now);
-                }
+            Backend::Lite(tx) => {
+                sqlx::query("UPDATE workers SET last_seen_at = $2 WHERE id = $1")
+                    .bind(id)
+                    .bind(now)
+                    .execute(&mut **tx)
+                    .await?;
             }
         }
         Ok(())
@@ -203,30 +234,39 @@ impl Tx {
                 .collect::<Result<_>>()?;
                 (ws, used, removals)
             }
-            Backend::Json(tx) => {
-                let mut ws: Vec<Worker> = tx
-                    .work
-                    .workers
-                    .iter()
-                    .filter(|w| only.is_none_or(|id| w.id == id))
-                    .cloned()
-                    .collect();
-                ws.sort_by(|a, b| a.name.cmp(&b.name));
-                let used =
-                    ws.iter()
-                        .map(|w| {
-                            let mine =
-                                tx.work.environments.iter().filter(|e| {
-                                    e.worker_id == Some(w.id) && e.desired != "deleted"
-                                });
-                            let (c, m) = mine.fold((0i64, 0i64), |(c, m), e| {
-                                (c + e.cpus as i64, m + e.memory_mib as i64)
-                            });
-                            (w.id, c, m)
-                        })
-                        .collect();
-                let mut removals = tx.work.worker_image_removals.clone();
-                removals.sort_by(|a, b| (&a.r#ref, &a.digest).cmp(&(&b.r#ref, &b.digest)));
+            Backend::Lite(tx) => {
+                let ws: Vec<Worker> = sqlx::query(&format!(
+                    "SELECT {WORKER_COLUMNS} FROM workers WHERE $1 IS NULL OR id = $1 ORDER BY name"
+                ))
+                .bind(only)
+                .fetch_all(&mut **tx)
+                .await?
+                .iter()
+                .map(worker)
+                .collect::<Result<_>>()?;
+                let used: Vec<(Uuid, i64, i64)> = sqlx::query(
+                    "SELECT worker_id, coalesce(sum(cpus), 0), coalesce(sum(memory_mib), 0)
+                     FROM environments WHERE worker_id IS NOT NULL AND desired <> 'deleted' GROUP BY worker_id",
+                )
+                .fetch_all(&mut **tx)
+                .await?
+                .iter()
+                .map(|r| Ok((r.try_get(0)?, r.try_get(1)?, r.try_get(2)?)))
+                .collect::<Result<_>>()?;
+                let removals: Vec<ImageRemoval> = sqlx::query(
+                    "SELECT worker_id, ref, digest FROM worker_image_removals ORDER BY ref, digest",
+                )
+                .fetch_all(&mut **tx)
+                .await?
+                .iter()
+                .map(|r| {
+                    Ok(ImageRemoval {
+                        worker_id: r.try_get(0)?,
+                        r#ref: r.try_get(1)?,
+                        digest: r.try_get(2)?,
+                    })
+                })
+                .collect::<Result<_>>()?;
                 (ws, used, removals)
             }
         };
@@ -266,10 +306,13 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => {
-                for w in tx.work.workers.iter_mut().filter(|w| w.id == id) {
-                    w.desired_version += 1;
-                }
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "UPDATE workers SET desired_version = desired_version + 1 WHERE id = $1",
+                )
+                .bind(id)
+                .execute(&mut **tx)
+                .await?;
             }
         }
         Ok(())
@@ -285,15 +328,13 @@ impl Tx {
             .bind(now)
             .fetch_optional(&mut **tx)
             .await?),
-            Backend::Json(tx) => Ok(tx
-                .work
-                .workers
-                .iter_mut()
-                .find(|w| w.id == id && w.revoked_at.is_none())
-                .map(|w| {
-                    w.revoked_at = Some(now);
-                    w.name.clone()
-                })),
+            Backend::Lite(tx) => Ok(sqlx::query_scalar(
+                "UPDATE workers SET revoked_at = $2 WHERE id = $1 AND revoked_at IS NULL RETURNING name",
+            )
+            .bind(id)
+            .bind(now)
+            .fetch_optional(&mut **tx)
+            .await?),
         }
     }
 
@@ -307,12 +348,12 @@ impl Tx {
             .bind(id)
             .fetch_optional(&mut **tx)
             .await?),
-            Backend::Json(tx) => Ok(tx
-                .work
-                .workers
-                .iter()
-                .find(|w| w.id == id)
-                .map(|w| w.revoked_at.is_some())),
+            Backend::Lite(tx) => Ok(sqlx::query_scalar(
+                "SELECT revoked_at IS NOT NULL FROM workers WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?),
         }
     }
 
@@ -325,12 +366,12 @@ impl Tx {
             .bind(id)
             .fetch_one(&mut **tx)
             .await?),
-            Backend::Json(tx) => Ok(tx
-                .work
-                .environments
-                .iter()
-                .filter(|e| e.worker_id == Some(id))
-                .count() as i64),
+            Backend::Lite(tx) => Ok(sqlx::query_scalar(
+                "SELECT count(*) FROM environments WHERE worker_id = $1",
+            )
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?),
         }
     }
 
@@ -343,16 +384,12 @@ impl Tx {
             .bind(id)
             .fetch_optional(&mut **tx)
             .await?),
-            Backend::Json(tx) => {
-                let Some(at) = tx.work.workers.iter().position(|w| w.id == id) else {
-                    return Ok(None);
-                };
-                tx.work.worker_image_removals.retain(|r| r.worker_id != id);
-                tx.work
-                    .worker_environment_removals
-                    .retain(|r| r.worker_id != id);
-                Ok(Some(tx.work.workers.remove(at).name))
-            }
+            Backend::Lite(tx) => Ok(sqlx::query_scalar(
+                "DELETE FROM workers WHERE id = $1 RETURNING name",
+            )
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?),
         }
     }
 
@@ -365,12 +402,12 @@ impl Tx {
             .bind(id)
             .fetch_optional(&mut **tx)
             .await?),
-            Backend::Json(tx) => Ok(tx
-                .work
-                .workers
-                .iter()
-                .find(|w| w.id == id)
-                .map(|w| w.desired_version)),
+            Backend::Lite(tx) => Ok(sqlx::query_scalar(
+                "SELECT desired_version FROM workers WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?),
         }
     }
 
@@ -417,31 +454,37 @@ impl Tx {
                 .await?;
                 Ok(Some((version, envs, images, forget)))
             }
-            Backend::Json(tx) => {
-                let mut envs: Vec<Environment> = tx
-                    .work
-                    .environments
-                    .iter()
-                    .filter(|e| e.worker_id == Some(id))
-                    .cloned()
-                    .collect();
-                envs.sort_by_key(|e| e.created_at);
-                let mut images: Vec<ImageRemoval> = tx
-                    .work
-                    .worker_image_removals
-                    .iter()
-                    .filter(|r| r.worker_id == id)
-                    .cloned()
-                    .collect();
-                images.sort_by(|a, b| (&a.r#ref, &a.digest).cmp(&(&b.r#ref, &b.digest)));
-                let mut forget: Vec<String> = tx
-                    .work
-                    .worker_environment_removals
-                    .iter()
-                    .filter(|r| r.worker_id == id)
-                    .map(|r| r.environment.clone())
-                    .collect();
-                forget.sort();
+            Backend::Lite(tx) => {
+                let envs = sqlx::query(&format!(
+                    "SELECT {LITE_ENVIRONMENT_COLUMNS} FROM environments WHERE worker_id = $1 ORDER BY created_at"
+                ))
+                .bind(id)
+                .fetch_all(&mut **tx)
+                .await?
+                .iter()
+                .map(environment)
+                .collect::<Result<_>>()?;
+                let images = sqlx::query(
+                    "SELECT worker_id, ref, digest FROM worker_image_removals WHERE worker_id = $1 ORDER BY ref, digest",
+                )
+                .bind(id)
+                .fetch_all(&mut **tx)
+                .await?
+                .iter()
+                .map(|r| {
+                    Ok(ImageRemoval {
+                        worker_id: r.try_get(0)?,
+                        r#ref: r.try_get(1)?,
+                        digest: r.try_get(2)?,
+                    })
+                })
+                .collect::<Result<_>>()?;
+                let forget = sqlx::query_scalar(
+                    "SELECT environment FROM worker_environment_removals WHERE worker_id = $1 ORDER BY environment",
+                )
+                .bind(id)
+                .fetch_all(&mut **tx)
+                .await?;
                 Ok(Some((version, envs, images, forget)))
             }
         }
@@ -463,17 +506,16 @@ impl Tx {
             .iter()
             .map(environment)
             .collect(),
-            Backend::Json(tx) => {
-                let mut out: Vec<Environment> = tx
-                    .work
-                    .environments
-                    .iter()
-                    .filter(|e| e.worker_id == Some(worker_id) && e.desired != "deleted")
-                    .cloned()
-                    .collect();
-                out.sort_by(|a, b| a.name.cmp(&b.name));
-                Ok(out)
-            }
+            Backend::Lite(tx) => sqlx::query(&format!(
+                "SELECT {LITE_ENVIRONMENT_COLUMNS} FROM environments
+                 WHERE worker_id = $1 AND desired <> 'deleted' ORDER BY name"
+            ))
+            .bind(worker_id)
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(environment)
+            .collect(),
         }
     }
 
@@ -488,7 +530,14 @@ impl Tx {
             .await?
             .map(|r| worker(&r))
             .transpose(),
-            Backend::Json(tx) => Ok(tx.work.workers.iter().find(|w| w.id == id).cloned()),
+            Backend::Lite(tx) => sqlx::query(&format!(
+                "SELECT {WORKER_COLUMNS} FROM workers WHERE id = $1"
+            ))
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?
+            .map(|r| worker(&r))
+            .transpose(),
         }
     }
 
@@ -501,7 +550,12 @@ impl Tx {
             .bind(id)
             .fetch_one(&mut **tx)
             .await?),
-            Backend::Json(tx) => Ok(tx.work.environments.iter().any(|e| e.id == id)),
+            Backend::Lite(tx) => Ok(sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM environments WHERE id = $1)",
+            )
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?),
         }
     }
 
@@ -520,11 +574,16 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => {
-                let w = &mut tx.work.worker_image_removals;
-                if !w.contains(r) {
-                    w.push(r.clone());
-                }
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "INSERT INTO worker_image_removals (worker_id, ref, digest) VALUES ($1, $2, $3)
+                     ON CONFLICT DO NOTHING",
+                )
+                .bind(r.worker_id)
+                .bind(&r.r#ref)
+                .bind(&r.digest)
+                .execute(&mut **tx)
+                .await?;
             }
         }
         Ok(())
@@ -544,11 +603,15 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => {
-                let w = &mut tx.work.worker_environment_removals;
-                if !w.contains(r) {
-                    w.push(r.clone());
-                }
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "INSERT INTO worker_environment_removals (worker_id, environment) VALUES ($1, $2)
+                     ON CONFLICT DO NOTHING",
+                )
+                .bind(r.worker_id)
+                .bind(&r.environment)
+                .execute(&mut **tx)
+                .await?;
             }
         }
         Ok(())

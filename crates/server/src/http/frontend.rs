@@ -241,7 +241,7 @@ async fn update_user(
         },
     )
     .await?;
-    let environments = app.store.begin().await?.owned_environments(u.id).await?;
+    let environments = app.store.read().await?.owned_environments(u.id).await?;
     Ok(Json(user_of(&users::Listed {
         user: u,
         environments,

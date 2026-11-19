@@ -5,8 +5,8 @@
 //!
 //! Without `HANGAR_SUITE_SERVER`, or without `HANGAR_TEST_DATABASE_URL` (a
 //! Postgres to make each server's database on), `Server::start` gives None
-//! and a test passes over its checks. `HANGAR_SUITE_STORAGE=json` gives
-//! each server a JSON state file (`HANGAR_STATE_FILE`) and needs no
+//! and a test passes over its checks. `HANGAR_SUITE_STORAGE=sqlite` gives
+//! each server a SQLite database (`HANGAR_STATE_FILE`) and needs no
 //! Postgres.
 //! Blobs go to `HANGAR_SUITE_BLOB_URL`, the dev stack's RustFS unless set.
 
@@ -73,8 +73,8 @@ impl Server {
     /// the suite's.
     pub fn start_with(settings: &[(&str, String)]) -> Option<Server> {
         let bin = std::env::var("HANGAR_SUITE_SERVER").ok()?;
-        let json = std::env::var("HANGAR_SUITE_STORAGE").is_ok_and(|s| s == "json");
-        let admin_db = match json {
+        let sqlite = std::env::var("HANGAR_SUITE_STORAGE").is_ok_and(|s| s == "sqlite");
+        let admin_db = match sqlite {
             true => None,
             false => Some(std::env::var("HANGAR_TEST_DATABASE_URL").ok()?),
         };
@@ -101,7 +101,7 @@ impl Server {
                     "HANGAR_DATABASE_URL".into(),
                     create_database(&db.admin, &db.name),
                 ),
-                None => ("HANGAR_STATE_FILE".into(), path(dir.join("state.json"))),
+                None => ("HANGAR_STATE_FILE".into(), path(dir.join("state.db"))),
             },
             ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
             ("HOME".into(), path(dir.clone())),

@@ -138,19 +138,24 @@ impl Tx {
                 })
             })
             .collect(),
-            Backend::Json(tx) => Ok(tx
-                .work
-                .environments
-                .iter()
-                .filter(|e| e.worker_id == Some(worker_id))
-                .map(|e| Placed {
-                    id: e.id,
-                    desired: e.desired.clone(),
-                    name: e.name.clone(),
-                    owner: e.owner_id,
-                    phase: e.phase.clone(),
+            Backend::Lite(tx) => sqlx::query(
+                "SELECT id, desired, name, owner_id, phase FROM environments WHERE worker_id = $1
+                 ORDER BY id",
+            )
+            .bind(worker_id)
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(|r| {
+                Ok(Placed {
+                    id: r.try_get(0)?,
+                    desired: r.try_get(1)?,
+                    name: r.try_get(2)?,
+                    owner: r.try_get(3)?,
+                    phase: r.try_get(4)?,
                 })
-                .collect()),
+            })
+            .collect(),
         }
     }
 
@@ -164,12 +169,12 @@ impl Tx {
             .bind(id)
             .fetch_optional(&mut **tx)
             .await?),
-            Backend::Json(tx) => Ok(tx
-                .work
-                .workers
-                .iter()
-                .find(|w| w.id == id)
-                .map(|w| (w.name.clone(), w.cpus, w.memory_mib))),
+            Backend::Lite(tx) => Ok(sqlx::query_as(
+                "SELECT name, cpus, memory_mib FROM workers WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?),
         }
     }
 
@@ -217,54 +222,61 @@ impl Tx {
                         .await?;
                 }
             }
-            Backend::Json(tx) => {
+            Backend::Lite(tx) => {
+                // As Postgres's trigger has it: usage alone is no change.
+                let watched = "SELECT phase, reason, progress, image_digest, image_pin_want,
+                        image_drop_rollback, image_update, image_rollback, guest_agent
+                     FROM environments WHERE id = $1";
+                type Watched = (
+                    String,
+                    String,
+                    Option<String>,
+                    String,
+                    Option<String>,
+                    bool,
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                );
+                let before: Option<Watched> = sqlx::query_as(watched)
+                    .bind(id)
+                    .fetch_optional(&mut **tx)
+                    .await?;
+                sqlx::query(
+                    "UPDATE environments SET phase = $2, reason = $3, stats = $4, progress = $5,
+                        image_digest = CASE WHEN $6 <> '' OR $7 THEN $6 ELSE image_digest END,
+                        image_pin_want = CASE WHEN $7 AND image_pin_want = $6 THEN NULL ELSE image_pin_want END,
+                        image_update = $8, image_rollback = $9,
+                        image_drop_rollback = image_drop_rollback AND $9 IS NOT NULL,
+                        updated_at = CASE WHEN phase IS NOT $2 OR reason IS NOT $3 THEN $10 ELSE updated_at END,
+                        guest_agent = $11
+                     WHERE id = $1",
+                )
+                .bind(id)
+                .bind(phase)
+                .bind(&o.reason)
+                .bind(&stats)
+                .bind(&progress)
+                .bind(&o.image_digest)
+                .bind(o.image_pinned)
+                .bind(&update)
+                .bind(&rollback)
+                .bind(now)
+                .bind(&guest_agent)
+                .execute(&mut **tx)
+                .await?;
+                let after: Option<Watched> = sqlx::query_as(watched)
+                    .bind(id)
+                    .fetch_optional(&mut **tx)
+                    .await?;
+                changed = before != after;
                 if !keeps_agents(phase) {
-                    tx.work.agent_sessions.retain(|a| a.environment_id != id);
-                }
-                if let Some(e) = tx.work.environments.iter_mut().find(|e| e.id == id) {
-                    let before = e.clone();
-                    if (e.phase.as_str(), e.reason.as_str()) != (phase, o.reason.as_str()) {
-                        e.updated_at = now;
-                    }
-                    e.phase = phase.to_string();
-                    e.reason = o.reason.clone();
-                    e.stats = stats;
-                    e.progress = progress;
-                    if !o.image_digest.is_empty() || o.image_pinned {
-                        e.image_digest = o.image_digest.clone();
-                    }
-                    if o.image_pinned
-                        && e.image_pin_want.as_deref() == Some(o.image_digest.as_str())
-                    {
-                        e.image_pin_want = None;
-                    }
-                    e.image_drop_rollback = e.image_drop_rollback && rollback.is_some();
-                    e.image_update = update;
-                    e.image_rollback = rollback;
-                    e.guest_agent = guest_agent;
-                    // As Postgres's trigger has it: usage alone is no change.
-                    let unchanged = (
-                        &before.phase,
-                        &before.reason,
-                        &before.progress,
-                        &before.image_digest,
-                        &before.image_pin_want,
-                        before.image_drop_rollback,
-                        &before.image_update,
-                        &before.image_rollback,
-                        &before.guest_agent,
-                    ) == (
-                        &e.phase,
-                        &e.reason,
-                        &e.progress,
-                        &e.image_digest,
-                        &e.image_pin_want,
-                        e.image_drop_rollback,
-                        &e.image_update,
-                        &e.image_rollback,
-                        &e.guest_agent,
-                    );
-                    changed = !unchanged;
+                    changed |= sqlx::query("DELETE FROM agent_sessions WHERE environment_id = $1")
+                        .bind(id)
+                        .execute(&mut **tx)
+                        .await?
+                        .rows_affected()
+                        > 0;
                 }
             }
         }
@@ -283,7 +295,12 @@ impl Tx {
                     .execute(&mut **tx)
                     .await?;
             }
-            Backend::Json(tx) => super::environments::json_delete(&mut tx.work, id),
+            Backend::Lite(tx) => {
+                sqlx::query("DELETE FROM environments WHERE id = $1")
+                    .bind(id)
+                    .execute(&mut **tx)
+                    .await?;
+            }
         }
         self.signal(Signal::Environment(id));
         Ok(())
@@ -347,26 +364,43 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => {
-                if let Some(w) = tx.work.workers.iter_mut().find(|w| w.id == id) {
-                    w.cpus = st.capacity.cpus as i32;
-                    w.memory_mib = st.capacity.memory_mib as i32;
-                    w.labels = labels;
-                    w.unknown = unknown_json;
-                    w.stats = stats;
-                    w.images = images;
-                    w.gpu = gpu;
-                    w.monitor = st.monitor.clone();
-                    w.version = st.version.clone();
-                    w.features = st.features.clone();
-                    w.last_seen_at = Some(now);
-                }
-                tx.work.worker_image_removals.retain(|r| {
-                    r.worker_id != id || held.contains(&format!("{}@{}", r.r#ref, r.digest))
-                });
-                tx.work
-                    .worker_environment_removals
-                    .retain(|r| r.worker_id != id || unknown.contains(&r.environment));
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "UPDATE workers SET cpus = $2, memory_mib = $3, labels = $4, unknown = $5,
+                        stats = $6, images = $7, gpu = $8, monitor = $9, version = $10, features = $11,
+                        last_seen_at = $12
+                     WHERE id = $1",
+                )
+                .bind(id)
+                .bind(st.capacity.cpus as i32)
+                .bind(st.capacity.memory_mib as i32)
+                .bind(&labels)
+                .bind(&unknown_json)
+                .bind(&stats)
+                .bind(&images)
+                .bind(&gpu)
+                .bind(&st.monitor)
+                .bind(&st.version)
+                .bind(sqlx::types::Json(&st.features))
+                .bind(now)
+                .execute(&mut **tx)
+                .await?;
+                sqlx::query(
+                    "DELETE FROM worker_image_removals
+                     WHERE worker_id = $1 AND ref || '@' || digest NOT IN (SELECT value FROM json_each($2))",
+                )
+                .bind(id)
+                .bind(sqlx::types::Json(&held))
+                .execute(&mut **tx)
+                .await?;
+                sqlx::query(
+                    "DELETE FROM worker_environment_removals
+                     WHERE worker_id = $1 AND environment NOT IN (SELECT value FROM json_each($2))",
+                )
+                .bind(id)
+                .bind(sqlx::types::Json(unknown))
+                .execute(&mut **tx)
+                .await?;
             }
         }
         Ok(())

@@ -356,7 +356,7 @@ impl Acme {
     async fn due(&self) -> Result<Vec<String>, String> {
         let mut due = Vec::new();
         for name in self.names() {
-            let mut tx = self.store.begin().await.map_err(|e| e.to_string())?;
+            let mut tx = self.store.read().await.map_err(|e| e.to_string())?;
             let stored = tx
                 .tls_load(&self.key(&name))
                 .await

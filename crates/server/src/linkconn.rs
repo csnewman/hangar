@@ -393,7 +393,7 @@ async fn keep_links(
     place: &Arc<Place>,
     keepers: &mut HashMap<Key, tokio::task::JoinHandle<()>>,
 ) {
-    let links = match async { app.store.begin().await?.links(None).await }.await {
+    let links = match async { app.store.read().await?.links(None).await }.await {
         Ok(l) => l,
         Err(e) => {
             eprintln!("hangar-server: reading links: {e}");
@@ -422,7 +422,7 @@ async fn keep_links(
 async fn scan_all(app: &App, place: &Place) -> Vec<Uuid> {
     let here = here(app, place);
     let scanned = async {
-        let users = app.store.begin().await?.linked_users().await?;
+        let users = app.store.read().await?.linked_users().await?;
         let mut changed = vec![];
         for user in users {
             if scan(app, &here, user).await? {
@@ -450,7 +450,7 @@ async fn scan(app: &App, here: &Here<'_>, user: Uuid) -> Result<bool, StoreError
 
 /// The link as it stands, and its person.
 async fn read_link(app: &App, (user, other): Key) -> Result<Option<(Uuid, Link)>, StoreError> {
-    let mut tx = app.store.begin().await?;
+    let mut tx = app.store.read().await?;
     let Some(link) = tx.link(user, other).await? else {
         return Ok(None);
     };
@@ -942,7 +942,7 @@ impl Pacer {
             return;
         }
         let read = async {
-            let mut tx = app.store.begin().await?;
+            let mut tx = app.store.read().await?;
             tx.link_bandwidth(user).await
         };
         match read.await {

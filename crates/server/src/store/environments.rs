@@ -6,10 +6,11 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::json::State;
 use super::rows::{AgentSession, Environment, Task, Worker};
 use super::signals::Signal;
-use super::workers::{ENVIRONMENT_COLUMNS, WORKER_COLUMNS, environment, worker};
+use super::workers::{
+    ENVIRONMENT_COLUMNS, LITE_ENVIRONMENT_COLUMNS, WORKER_COLUMNS, environment, worker,
+};
 use super::{Backend, Result, Tx};
 
 /// Which environments to read.
@@ -38,17 +39,6 @@ pub struct Room {
     pub free_memory_mib: i64,
 }
 
-/// An environment that takes its worker's CPUs and memory: one meant to be
-/// running, or whose machine is still up. A stopped or suspended one holds
-/// only its disks.
-pub fn occupies(e: &Environment) -> bool {
-    e.desired == "running"
-        || matches!(
-            e.phase.as_str(),
-            "starting" | "running" | "stopping" | "suspending"
-        )
-}
-
 const OCCUPYING: &str =
     "(desired = 'running' OR phase IN ('starting', 'running', 'stopping', 'suspending'))";
 
@@ -57,7 +47,7 @@ const TASK_COLUMNS: &str = "id, environment_id, text, set_by, set_at, done_at";
 const AGENT_COLUMNS: &str =
     "environment_id, id, agent, terminal, state, step, message, since, seen_at";
 
-fn task(r: &sqlx::postgres::PgRow) -> Result<Task> {
+fn task(r: &impl super::Get) -> Result<Task> {
     Ok(Task {
         id: r.try_get("id")?,
         environment_id: r.try_get("environment_id")?,
@@ -68,7 +58,7 @@ fn task(r: &sqlx::postgres::PgRow) -> Result<Task> {
     })
 }
 
-fn agent(r: &sqlx::postgres::PgRow) -> Result<AgentSession> {
+fn agent(r: &impl super::Get) -> Result<AgentSession> {
     Ok(AgentSession {
         environment_id: r.try_get("environment_id")?,
         id: r.try_get("id")?,
@@ -80,19 +70,6 @@ fn agent(r: &sqlx::postgres::PgRow) -> Result<AgentSession> {
         since: r.try_get("since")?,
         seen_at: r.try_get("seen_at")?,
     })
-}
-
-/// Removes an environment from the JSON state, with what Postgres deletes
-/// with it.
-pub(super) fn json_delete(work: &mut State, id: Uuid) {
-    work.environments.retain(|e| e.id != id);
-    work.environment_tasks.retain(|t| t.environment_id != id);
-    work.agent_sessions.retain(|a| a.environment_id != id);
-    work.editor_sessions.retain(|s| s.environment_id != id);
-    work.environment_copies.retain(|e| e.environment_id != id);
-    work.environment_routed.retain(|r| r.environment_id != id);
-    work.environment_conflicts
-        .retain(|c| c.environment_id != id);
 }
 
 impl Tx {
@@ -118,20 +95,24 @@ impl Tx {
                     .map(environment)
                     .collect()
             }
-            Backend::Json(tx) => {
-                let mut out: Vec<Environment> = tx
-                    .work
-                    .environments
+            Backend::Lite(tx) => {
+                let (cond, id) = match only {
+                    Only::All => ("true", None),
+                    Only::Owner(id) => ("owner_id = $1", Some(id)),
+                    Only::Id(id) => ("id = $1", Some(id)),
+                };
+                let q = format!(
+                    "SELECT {LITE_ENVIRONMENT_COLUMNS} FROM environments WHERE {cond} ORDER BY created_at"
+                );
+                let mut q = sqlx::query(&q);
+                if let Some(id) = id {
+                    q = q.bind(id);
+                }
+                q.fetch_all(&mut **tx)
+                    .await?
                     .iter()
-                    .filter(|e| match only {
-                        Only::All => true,
-                        Only::Owner(id) => e.owner_id == id,
-                        Only::Id(id) => e.id == id,
-                    })
-                    .cloned()
-                    .collect();
-                out.sort_by_key(|e| e.created_at);
-                Ok(out)
+                    .map(environment)
+                    .collect()
             }
         }
     }
@@ -185,17 +166,39 @@ impl Tx {
                     Err(err) => return Err(err.into()),
                 }
             }
-            Backend::Json(tx) => {
-                let all = &tx.work.environments;
-                if all.iter().any(|o| o.short_id == e.short_id) {
-                    return Ok(Inserted::ShortIdTaken);
+            Backend::Lite(tx) => {
+                let r = sqlx::query(
+                    "INSERT INTO environments (id, short_id, owner_id, name, template_id, template_name,
+                        template_revision, spec, image, cpus, memory_mib, desired, phase, reason,
+                        created_at, updated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $15)
+                     ON CONFLICT (short_id) DO NOTHING RETURNING id",
+                )
+                .bind(e.id)
+                .bind(&e.short_id)
+                .bind(e.owner_id)
+                .bind(&e.name)
+                .bind(e.template_id)
+                .bind(&e.template_name)
+                .bind(e.template_revision)
+                .bind(&e.spec)
+                .bind(&e.image)
+                .bind(e.cpus)
+                .bind(e.memory_mib)
+                .bind(&e.desired)
+                .bind(&e.phase)
+                .bind(&e.reason)
+                .bind(e.created_at)
+                .fetch_optional(&mut **tx)
+                .await;
+                match r {
+                    Ok(Some(_)) => {}
+                    Ok(None) => return Ok(Inserted::ShortIdTaken),
+                    Err(err) if super::lite::violates(&err, "environments_owner_name", &[]) => {
+                        return Ok(Inserted::NameTaken);
+                    }
+                    Err(err) => return Err(err.into()),
                 }
-                if all.iter().any(|o| {
-                    o.owner_id == e.owner_id && o.name.to_lowercase() == e.name.to_lowercase()
-                }) {
-                    return Ok(Inserted::NameTaken);
-                }
-                tx.work.environments.push(e.clone());
             }
         }
         self.signal(Signal::Environment(e.id));
@@ -232,22 +235,29 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => {
-                if let Some(o) = tx.work.environments.iter_mut().find(|o| o.id == e.id) {
-                    o.spec = e.spec.clone();
-                    o.image = e.image.clone();
-                    o.cpus = e.cpus;
-                    o.memory_mib = e.memory_mib;
-                    o.template_revision = e.template_revision;
-                    o.desired = e.desired.clone();
-                    o.worker_id = e.worker_id;
-                    o.phase = e.phase.clone();
-                    o.reason = e.reason.clone();
-                    o.image_pin_want = e.image_pin_want.clone();
-                    o.image_drop_rollback = e.image_drop_rollback;
-                    o.ports_public = e.ports_public;
-                    o.updated_at = e.updated_at;
-                }
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "UPDATE environments SET spec = $2, image = $3, cpus = $4, memory_mib = $5,
+                        template_revision = $6, desired = $7, worker_id = $8, phase = $9, reason = $10,
+                        image_pin_want = $11, image_drop_rollback = $12, ports_public = $13, updated_at = $14
+                     WHERE id = $1",
+                )
+                .bind(e.id)
+                .bind(&e.spec)
+                .bind(&e.image)
+                .bind(e.cpus)
+                .bind(e.memory_mib)
+                .bind(e.template_revision)
+                .bind(&e.desired)
+                .bind(e.worker_id)
+                .bind(&e.phase)
+                .bind(&e.reason)
+                .bind(&e.image_pin_want)
+                .bind(e.image_drop_rollback)
+                .bind(e.ports_public)
+                .bind(e.updated_at)
+                .execute(&mut **tx)
+                .await?;
             }
         }
         self.signal(Signal::Environment(e.id));
@@ -262,7 +272,12 @@ impl Tx {
                     .execute(&mut **tx)
                     .await?;
             }
-            Backend::Json(tx) => json_delete(&mut tx.work, id),
+            Backend::Lite(tx) => {
+                sqlx::query("DELETE FROM environments WHERE id = $1")
+                    .bind(id)
+                    .execute(&mut **tx)
+                    .await?;
+            }
         }
         self.signal(Signal::Environment(id));
         Ok(())
@@ -281,16 +296,15 @@ impl Tx {
             .iter()
             .map(|r| Ok((r.try_get(0)?, r.try_get(1)?, r.try_get(2)?, r.try_get(3)?)))
             .collect(),
-            Backend::Json(tx) => Ok(tx
-                .work
-                .environments
-                .iter()
-                .filter(|e| occupies(e))
-                .filter_map(|e| {
-                    e.worker_id
-                        .map(|w| (w, e.id, e.cpus as i64, e.memory_mib as i64))
-                })
-                .collect()),
+            Backend::Lite(tx) => sqlx::query(&format!(
+                "SELECT worker_id, id, cpus, memory_mib FROM environments
+                 WHERE worker_id IS NOT NULL AND {OCCUPYING}"
+            ))
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(|r| Ok((r.try_get(0)?, r.try_get(1)?, r.try_get(2)?, r.try_get(3)?)))
+            .collect(),
         }
     }
 
@@ -306,12 +320,14 @@ impl Tx {
             .await?
             .map(|r| Ok::<_, sqlx::Error>((r.try_get(0)?, r.try_get(1)?, r.try_get(2)?)))
             .transpose()?,
-            Backend::Json(tx) => tx
-                .work
-                .workers
-                .iter()
-                .find(|w| w.id == worker)
-                .map(|w| (w.name.clone(), w.cpus as i64, w.memory_mib as i64)),
+            Backend::Lite(tx) => sqlx::query(
+                "SELECT name, cpus, memory_mib FROM workers WHERE id = $1",
+            )
+            .bind(worker)
+            .fetch_optional(&mut **tx)
+            .await?
+            .map(|r| Ok::<_, sqlx::Error>((r.try_get(0)?, r.try_get(1)?, r.try_get(2)?)))
+            .transpose()?,
         };
         let Some((name, cpus, mem)) = row else {
             return Ok(None);
@@ -342,13 +358,17 @@ impl Tx {
             .iter()
             .map(task)
             .collect(),
-            Backend::Json(tx) => Ok(tx
-                .work
-                .environment_tasks
-                .iter()
-                .filter(|t| t.done_at.is_none() && envs.contains(&t.environment_id))
-                .cloned()
-                .collect()),
+            Backend::Lite(tx) => sqlx::query(&format!(
+                "SELECT {TASK_COLUMNS} FROM environment_tasks
+                 WHERE environment_id IN (SELECT unhex(replace(value, '-', '')) FROM json_each($1))
+                    AND done_at IS NULL"
+            ))
+            .bind(sqlx::types::Json(envs))
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(task)
+            .collect(),
         }
     }
 
@@ -366,27 +386,16 @@ impl Tx {
             .iter()
             .map(task)
             .collect(),
-            Backend::Json(tx) => {
-                let mut out: Vec<Task> = tx
-                    .work
-                    .environment_tasks
-                    .iter()
-                    .filter(|t| t.environment_id == env)
-                    .cloned()
-                    .collect();
-                // done_at descending, the one not done first.
-                out.sort_by(|a, b| {
-                    b.set_at
-                        .cmp(&a.set_at)
-                        .then_with(|| match (a.done_at, b.done_at) {
-                            (None, None) => std::cmp::Ordering::Equal,
-                            (None, Some(_)) => std::cmp::Ordering::Less,
-                            (Some(_), None) => std::cmp::Ordering::Greater,
-                            (Some(x), Some(y)) => y.cmp(&x),
-                        })
-                });
-                Ok(out)
-            }
+            Backend::Lite(tx) => sqlx::query(&format!(
+                "SELECT {TASK_COLUMNS} FROM environment_tasks WHERE environment_id = $1
+                 ORDER BY set_at DESC, done_at DESC NULLS FIRST"
+            ))
+            .bind(env)
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(task)
+            .collect(),
         }
     }
 
@@ -406,7 +415,19 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => tx.work.environment_tasks.push(t.clone()),
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "INSERT INTO environment_tasks (id, environment_id, text, set_by, set_at)
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(t.id)
+                .bind(t.environment_id)
+                .bind(&t.text)
+                .bind(&t.set_by)
+                .bind(t.set_at)
+                .execute(&mut **tx)
+                .await?;
+            }
         }
         self.signal(Signal::Environment(t.environment_id));
         Ok(())
@@ -428,18 +449,17 @@ impl Tx {
                 .rows_affected()
                     > 0
             }
-            Backend::Json(tx) => {
-                let mut ended = false;
-                for t in tx
-                    .work
-                    .environment_tasks
-                    .iter_mut()
-                    .filter(|t| t.environment_id == env && t.done_at.is_none())
-                {
-                    t.done_at = Some(now);
-                    ended = true;
-                }
-                ended
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "UPDATE environment_tasks SET done_at = $2
+                     WHERE environment_id = $1 AND done_at IS NULL",
+                )
+                .bind(env)
+                .bind(now)
+                .execute(&mut **tx)
+                .await?
+                .rows_affected()
+                    > 0
             }
         };
         if ended {
@@ -461,17 +481,16 @@ impl Tx {
             .iter()
             .map(agent)
             .collect(),
-            Backend::Json(tx) => {
-                let mut out: Vec<AgentSession> = tx
-                    .work
-                    .agent_sessions
-                    .iter()
-                    .filter(|a| envs.contains(&a.environment_id))
-                    .cloned()
-                    .collect();
-                out.sort_by_key(|a| a.since);
-                Ok(out)
-            }
+            Backend::Lite(tx) => sqlx::query(&format!(
+                "SELECT {AGENT_COLUMNS} FROM agent_sessions WHERE environment_id IN (SELECT unhex(replace(value, '-', '')) FROM json_each($1))
+                 ORDER BY since"
+            ))
+            .bind(sqlx::types::Json(envs))
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(agent)
+            .collect()
         }
     }
 
@@ -513,51 +532,38 @@ impl Tx {
                     .await?;
                 }
             }
-            Backend::Json(tx) => {
-                let w = &mut tx.work.agent_sessions;
-                let before = w.len();
-                w.retain(|a| a.environment_id != env || ids.contains(&a.id.as_str()));
-                changed |= w.len() != before;
+            Backend::Lite(tx) => {
+                changed |= sqlx::query(
+                    "DELETE FROM agent_sessions WHERE environment_id = $1
+                     AND id NOT IN (SELECT value FROM json_each($2))",
+                )
+                .bind(env)
+                .bind(sqlx::types::Json(&ids))
+                .execute(&mut **tx)
+                .await?
+                .rows_affected()
+                    > 0;
                 for a in sessions {
-                    match w
-                        .iter_mut()
-                        .find(|o| o.environment_id == env && o.id == a.id)
-                    {
-                        Some(o) => {
-                            let same = (
-                                &o.agent,
-                                &o.terminal,
-                                &o.state,
-                                &o.step,
-                                &o.message,
-                                o.since,
-                            ) == (
-                                &a.agent,
-                                &a.terminal,
-                                &a.state,
-                                &a.step,
-                                &a.message,
-                                a.since,
-                            );
-                            if !same {
-                                let seen = o.seen_at;
-                                *o = AgentSession {
-                                    environment_id: env,
-                                    seen_at: seen,
-                                    ..a.clone()
-                                };
-                                changed = true;
-                            }
-                        }
-                        None => {
-                            w.push(AgentSession {
-                                environment_id: env,
-                                seen_at: None,
-                                ..a.clone()
-                            });
-                            changed = true;
-                        }
-                    }
+                    changed |= sqlx::query(
+                        "INSERT INTO agent_sessions AS a (environment_id, id, agent, terminal, state, step, message, since)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                         ON CONFLICT (environment_id, id) DO UPDATE SET agent = $3, terminal = $4, state = $5, step = $6,
+                            message = $7, since = $8
+                         WHERE a.agent IS NOT $3 OR a.terminal IS NOT $4 OR a.state IS NOT $5
+                            OR a.step IS NOT $6 OR a.message IS NOT $7 OR a.since IS NOT $8",
+                    )
+                    .bind(env)
+                    .bind(&a.id)
+                    .bind(&a.agent)
+                    .bind(&a.terminal)
+                    .bind(&a.state)
+                    .bind(&a.step)
+                    .bind(&a.message)
+                    .bind(a.since)
+                    .execute(&mut **tx)
+                    .await?
+                    .rows_affected()
+                        > 0;
                 }
             }
         }
@@ -586,18 +592,18 @@ impl Tx {
                 .rows_affected()
                     > 0
             }
-            Backend::Json(tx) => {
-                let mut seen = false;
-                for a in tx
-                    .work
-                    .agent_sessions
-                    .iter_mut()
-                    .filter(|a| a.environment_id == env && a.id == id)
-                {
-                    a.seen_at = Some(now.max(a.since));
-                    seen = true;
-                }
-                seen
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "UPDATE agent_sessions SET seen_at = max($3, since)
+                     WHERE environment_id = $1 AND id = $2",
+                )
+                .bind(env)
+                .bind(id)
+                .bind(now)
+                .execute(&mut **tx)
+                .await?
+                .rows_affected()
+                    > 0
             }
         };
         if seen {
@@ -622,18 +628,17 @@ impl Tx {
             .iter()
             .map(environment)
             .collect(),
-            Backend::Json(tx) => {
-                let mut out: Vec<Environment> = tx
-                    .work
-                    .environments
-                    .iter()
-                    .filter(|e| e.worker_id.is_none() && e.desired == "running")
-                    .cloned()
-                    .collect();
-                out.sort_by_key(|e| e.created_at);
-                out.truncate(limit.max(0) as usize);
-                Ok(out)
-            }
+            Backend::Lite(tx) => sqlx::query(&format!(
+                "SELECT {LITE_ENVIRONMENT_COLUMNS} FROM environments
+                 WHERE worker_id IS NULL AND desired = 'running'
+                 ORDER BY created_at LIMIT $1"
+            ))
+            .bind(limit)
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(environment)
+            .collect(),
         }
     }
 
@@ -651,19 +656,16 @@ impl Tx {
             .iter()
             .map(worker)
             .collect(),
-            Backend::Json(tx) => {
-                let mut out: Vec<Worker> = tx
-                    .work
-                    .workers
-                    .iter()
-                    .filter(|w| {
-                        w.revoked_at.is_none() && w.last_seen_at.is_some_and(|at| at > since)
-                    })
-                    .cloned()
-                    .collect();
-                out.sort_by_key(|w| w.id);
-                Ok(out)
-            }
+            Backend::Lite(tx) => sqlx::query(&format!(
+                "SELECT {WORKER_COLUMNS} FROM workers
+                 WHERE revoked_at IS NULL AND last_seen_at > $1 ORDER BY id"
+            ))
+            .bind(since)
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(worker)
+            .collect(),
         }
     }
 }

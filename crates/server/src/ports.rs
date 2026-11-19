@@ -154,11 +154,12 @@ async fn authenticate(store: &Store, cookie: &str, env: Uuid) -> StoreResult<Opt
     }
     let hash = Sha256::digest(cookie.as_bytes()).to_vec();
     let now = Utc::now();
-    let mut tx = store.begin().await?;
+    let mut tx = store.read().await?;
     let Some((e, expires)) = tx.host_cookie(&hash, env, now).await? else {
         return Ok(None);
     };
     if expires - now < COOKIE_LIFETIME - COOKIE_REFRESH {
+        let mut tx = store.writer(tx).await?;
         tx.extend_host_cookie(&hash, now + COOKIE_LIFETIME).await?;
         tx.commit().await?;
     }

@@ -106,10 +106,10 @@ jobs:
       - run: cargo build -p hangar-server
       - name: The suite, on Postgres
         run: cargo test -p hangar-suite
-      - name: The suite, on a state file
+      - name: The suite, on SQLite
         run: cargo test -p hangar-suite
         env:
-          HANGAR_SUITE_STORAGE: json
+          HANGAR_SUITE_STORAGE: sqlite
 
   web:
     runs-on: ubuntu-26.04

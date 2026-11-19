@@ -489,7 +489,7 @@ impl Sealed {
 /// the person's account here linked with that place.
 pub async fn admit(store: &Store, from: Uuid, person: Uuid) -> Result<Link, Refused> {
     let found = async {
-        let mut tx = store.begin().await?;
+        let mut tx = store.read().await?;
         let Some(user) = tx.user_by_person(person).await? else {
             return Ok(None);
         };

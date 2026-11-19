@@ -2,16 +2,15 @@
 //! account here is linked with, for both backends.
 
 use chrono::{DateTime, Utc};
-use sqlx::Row;
 use uuid::Uuid;
 
-use super::rows::{Link, LinkPerson, LinkRecord, LinkSettings};
+use super::rows::{Link, LinkRecord};
 use super::{Backend, Result, Tx};
 
 const LINK_COLUMNS: &str = "user_id, place_id, name, public_key, url, created_at, reached_at, \
      reach_error, heard_at, synced_at, sync_error";
 
-fn link(r: &sqlx::postgres::PgRow) -> Result<Link> {
+fn link(r: &impl super::Get) -> Result<Link> {
     Ok(Link {
         user_id: r.try_get("user_id")?,
         place_id: r.try_get("place_id")?,
@@ -27,7 +26,7 @@ fn link(r: &sqlx::postgres::PgRow) -> Result<Link> {
     })
 }
 
-fn record(r: &sqlx::postgres::PgRow) -> Result<LinkRecord> {
+fn record(r: &impl super::Get) -> Result<LinkRecord> {
     Ok(LinkRecord {
         user_id: r.try_get("user_id")?,
         kind: r.try_get("kind")?,
@@ -50,12 +49,12 @@ impl Tx {
                     .fetch_optional(&mut **tx)
                     .await?
             }
-            Backend::Json(tx) => tx
-                .work
-                .link_persons
-                .iter()
-                .find(|p| p.user_id == user)
-                .map(|p| p.person_id),
+            Backend::Lite(tx) => {
+                sqlx::query_scalar("SELECT person_id FROM link_persons WHERE user_id = $1")
+                    .bind(user)
+                    .fetch_optional(&mut **tx)
+                    .await?
+            }
         };
         Ok(found.unwrap_or(user))
     }
@@ -79,13 +78,15 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => {
-                let persons = &mut tx.work.link_persons;
-                persons.retain(|p| p.user_id != user);
-                persons.push(LinkPerson {
-                    user_id: user,
-                    person_id: person,
-                });
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "INSERT INTO link_persons (user_id, person_id) VALUES ($1, $2)
+                     ON CONFLICT (user_id) DO UPDATE SET person_id = EXCLUDED.person_id",
+                )
+                .bind(user)
+                .bind(person)
+                .execute(&mut **tx)
+                .await?;
             }
         }
         Ok(true)
@@ -101,12 +102,12 @@ impl Tx {
                     .fetch_optional(&mut **tx)
                     .await?
             }
-            Backend::Json(tx) => tx
-                .work
-                .link_settings
-                .iter()
-                .find(|s| s.user_id == user)
-                .map(|s| s.bandwidth),
+            Backend::Lite(tx) => {
+                sqlx::query_scalar("SELECT bandwidth FROM link_settings WHERE user_id = $1")
+                    .bind(user)
+                    .fetch_optional(&mut **tx)
+                    .await?
+            }
         };
         Ok(found.unwrap_or(0))
     }
@@ -123,13 +124,15 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => {
-                let all = &mut tx.work.link_settings;
-                all.retain(|s| s.user_id != user);
-                all.push(LinkSettings {
-                    user_id: user,
-                    bandwidth,
-                });
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "INSERT INTO link_settings (user_id, bandwidth) VALUES ($1, $2)
+                     ON CONFLICT (user_id) DO UPDATE SET bandwidth = EXCLUDED.bandwidth",
+                )
+                .bind(user)
+                .bind(bandwidth)
+                .execute(&mut **tx)
+                .await?;
             }
         }
         self.signal(super::signals::Signal::Records);
@@ -151,16 +154,16 @@ impl Tx {
             .bind(person)
             .fetch_optional(&mut **tx)
             .await?),
-            Backend::Json(tx) => {
-                let w = &tx.work;
-                if let Some(p) = w.link_persons.iter().find(|p| p.person_id == person) {
-                    return Ok(Some(p.user_id));
-                }
-                Ok(w.users
-                    .iter()
-                    .find(|u| u.id == person && !w.link_persons.iter().any(|p| p.user_id == u.id))
-                    .map(|u| u.id))
-            }
+            Backend::Lite(tx) => Ok(sqlx::query_scalar(
+                "SELECT user_id FROM link_persons WHERE person_id = $1
+                 UNION ALL
+                 SELECT id FROM users u WHERE id = $1
+                   AND NOT EXISTS (SELECT 1 FROM link_persons p WHERE p.user_id = u.id)
+                 LIMIT 1",
+            )
+            .bind(person)
+            .fetch_optional(&mut **tx)
+            .await?),
         }
     }
 
@@ -177,17 +180,16 @@ impl Tx {
             .iter()
             .map(link)
             .collect(),
-            Backend::Json(tx) => {
-                let mut out: Vec<Link> = tx
-                    .work
-                    .links
-                    .iter()
-                    .filter(|l| user.is_none_or(|u| l.user_id == u))
-                    .cloned()
-                    .collect();
-                out.sort_by_key(|l| (l.created_at, l.place_id));
-                Ok(out)
-            }
+            Backend::Lite(tx) => sqlx::query(&format!(
+                "SELECT {LINK_COLUMNS} FROM links WHERE $1 IS NULL OR user_id = $1
+                 ORDER BY created_at, place_id"
+            ))
+            .bind(user)
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(link)
+            .collect(),
         }
     }
 
@@ -222,31 +224,23 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => {
-                let links = &mut tx.work.links;
-                match links
-                    .iter_mut()
-                    .find(|o| o.user_id == l.user_id && o.place_id == l.place_id)
-                {
-                    Some(o) => {
-                        o.name = l.name.clone();
-                        o.public_key = l.public_key.clone();
-                        o.url = l.url.clone();
-                        o.reached_at = None;
-                        o.reach_error = String::new();
-                        o.heard_at = None;
-                        o.synced_at = None;
-                        o.sync_error = String::new();
-                    }
-                    None => links.push(Link {
-                        reached_at: None,
-                        reach_error: String::new(),
-                        heard_at: None,
-                        synced_at: None,
-                        sync_error: String::new(),
-                        ..l.clone()
-                    }),
-                }
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "INSERT INTO links (user_id, place_id, name, public_key, url, created_at)
+                     VALUES ($1, $2, $3, $4, $5, $6)
+                     ON CONFLICT (user_id, place_id) DO UPDATE SET name = EXCLUDED.name,
+                       public_key = EXCLUDED.public_key, url = EXCLUDED.url,
+                       reached_at = NULL, reach_error = '', heard_at = NULL,
+                       synced_at = NULL, sync_error = ''",
+                )
+                .bind(l.user_id)
+                .bind(l.place_id)
+                .bind(&l.name)
+                .bind(&l.public_key)
+                .bind(&l.url)
+                .bind(l.created_at)
+                .execute(&mut **tx)
+                .await?;
             }
         }
         Ok(())
@@ -264,13 +258,15 @@ impl Tx {
             .await?
             .rows_affected()
                 == 1),
-            Backend::Json(tx) => {
-                let before = tx.work.links.len();
-                tx.work
-                    .links
-                    .retain(|l| !(l.user_id == user && l.place_id == place));
-                Ok(tx.work.links.len() != before)
-            }
+            Backend::Lite(tx) => Ok(sqlx::query(
+                "DELETE FROM links WHERE user_id = $1 AND place_id = $2",
+            )
+            .bind(user)
+            .bind(place)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected()
+                == 1),
         }
     }
 
@@ -299,18 +295,17 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => {
-                if let Some(l) = tx
-                    .work
-                    .links
-                    .iter_mut()
-                    .find(|l| l.user_id == user && l.place_id == place)
-                {
-                    if at.is_some() {
-                        l.reached_at = at;
-                    }
-                    l.reach_error = error;
-                }
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "UPDATE links SET reached_at = COALESCE($3, reached_at), reach_error = $4
+                     WHERE user_id = $1 AND place_id = $2",
+                )
+                .bind(user)
+                .bind(place)
+                .bind(at)
+                .bind(&error)
+                .execute(&mut **tx)
+                .await?;
             }
         }
         Ok(())
@@ -327,15 +322,13 @@ impl Tx {
                     .execute(&mut **tx)
                     .await?;
             }
-            Backend::Json(tx) => {
-                if let Some(l) = tx
-                    .work
-                    .links
-                    .iter_mut()
-                    .find(|l| l.user_id == user && l.place_id == place)
-                {
-                    l.heard_at = Some(at);
-                }
+            Backend::Lite(tx) => {
+                sqlx::query("UPDATE links SET heard_at = $3 WHERE user_id = $1 AND place_id = $2")
+                    .bind(user)
+                    .bind(place)
+                    .bind(at)
+                    .execute(&mut **tx)
+                    .await?;
             }
         }
         Ok(())
@@ -366,18 +359,17 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => {
-                if let Some(l) = tx
-                    .work
-                    .links
-                    .iter_mut()
-                    .find(|l| l.user_id == user && l.place_id == place)
-                {
-                    if at.is_some() {
-                        l.synced_at = at;
-                    }
-                    l.sync_error = error;
-                }
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "UPDATE links SET synced_at = COALESCE($3, synced_at), sync_error = $4
+                     WHERE user_id = $1 AND place_id = $2",
+                )
+                .bind(user)
+                .bind(place)
+                .bind(at)
+                .bind(&error)
+                .execute(&mut **tx)
+                .await?;
             }
         }
         Ok(())
@@ -416,17 +408,16 @@ impl Tx {
             .iter()
             .map(record)
             .collect(),
-            Backend::Json(tx) => {
-                let mut out: Vec<LinkRecord> = tx
-                    .work
-                    .link_records
-                    .iter()
-                    .filter(|r| r.user_id == user)
-                    .cloned()
-                    .collect();
-                out.sort_by(|a, b| (&a.kind, &a.record_id).cmp(&(&b.kind, &b.record_id)));
-                Ok(out)
-            }
+            Backend::Lite(tx) => sqlx::query(
+                "SELECT user_id, kind, record_id, hlc, origin, digest, deleted FROM link_records
+                 WHERE user_id = $1 ORDER BY kind, record_id",
+            )
+            .bind(user)
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(record)
+            .collect(),
         }
     }
 
@@ -450,14 +441,22 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => {
-                let rs = &mut tx.work.link_records;
-                match rs.iter_mut().find(|o| {
-                    o.user_id == r.user_id && o.kind == r.kind && o.record_id == r.record_id
-                }) {
-                    Some(o) => *o = r.clone(),
-                    None => rs.push(r.clone()),
-                }
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "INSERT INTO link_records (user_id, kind, record_id, hlc, origin, digest, deleted)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     ON CONFLICT (user_id, kind, record_id) DO UPDATE SET hlc = EXCLUDED.hlc,
+                       origin = EXCLUDED.origin, digest = EXCLUDED.digest, deleted = EXCLUDED.deleted",
+                )
+                .bind(r.user_id)
+                .bind(&r.kind)
+                .bind(&r.record_id)
+                .bind(r.hlc)
+                .bind(r.origin)
+                .bind(&r.digest)
+                .bind(r.deleted)
+                .execute(&mut **tx)
+                .await?;
             }
         }
         Ok(())
@@ -472,13 +471,12 @@ impl Tx {
             .fetch_one(&mut **tx)
             .await?
             .unwrap_or(0)),
-            Backend::Json(tx) => Ok(tx
-                .work
-                .link_records
-                .iter()
-                .map(|r| r.hlc)
-                .max()
-                .unwrap_or(0)),
+            Backend::Lite(tx) => Ok(sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT max(hlc) FROM link_records",
+            )
+            .fetch_one(&mut **tx)
+            .await?
+            .unwrap_or(0)),
         }
     }
 }

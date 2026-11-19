@@ -497,8 +497,8 @@ mod role {
     /// Readies a Hangar of its own's server: its directory, the secrets it
     /// makes once (its key for secrets at rest, the token its worker
     /// enrols with) and the certificate its maker gave; its environment.
-    /// Its state is a file (`HANGAR_STATE_FILE`), and its files root the
-    /// worker's own. Its registry stays off while its address is an IP
+    /// Its state is a SQLite database (`HANGAR_STATE_FILE`, which imports a
+    /// `state.json` beside it), and its files root the worker's own. Its registry stays off while its address is an IP
     /// address, as the registry is a host name of its own.
     fn configure_server(own: &Own, address: Ipv4Addr) -> io::Result<Vec<(String, String)>> {
         std::fs::create_dir_all(SERVER_DIR)?;
@@ -520,7 +520,7 @@ mod role {
         )?;
         let at = |f: &str| dir.join(f).to_string_lossy().into_owned();
         Ok([
-            ("HANGAR_STATE_FILE", at("state.json")),
+            ("HANGAR_STATE_FILE", at("state.db")),
             ("HANGAR_LISTEN", LOCAL_API.to_string()),
             ("HANGAR_PUBLIC_URL", format!("https://{address}")),
             ("HANGAR_TLS_LISTEN", format!(":{HTTPS_PORT}")),

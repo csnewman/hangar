@@ -291,7 +291,7 @@ async fn set_collaborators(
 }
 
 async fn people(State(app): State<Shared>) -> Result<Json<Vec<types::Person>>, ApiError> {
-    let people = app.store.begin().await?.people().await?;
+    let people = app.store.read().await?.people().await?;
     Ok(Json(
         people
             .into_iter()

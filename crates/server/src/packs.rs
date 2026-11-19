@@ -593,7 +593,7 @@ pub async fn pack(store: &Store, p: &Principal, id: Uuid) -> StoreResult<Option<
 /// The copies p chose to use of packs by default, by pack, among those
 /// they may still use.
 pub async fn defaults(store: &Store, p: &Principal) -> StoreResult<HashMap<Uuid, Uuid>> {
-    let mut tx = store.begin().await?;
+    let mut tx = store.read().await?;
     let w = World::load(&mut tx).await?;
     let asker = Asker {
         admin: false,
@@ -1878,7 +1878,7 @@ pub async fn add_conflict(store: &Store, env: Uuid, copy: &str, path: &str) -> f
 
 /// An environment's conflicts, by path.
 pub async fn conflicts(store: &Store, env: Uuid) -> StoreResult<Vec<crate::store::rows::Conflict>> {
-    store.begin().await?.conflicts(env).await
+    store.read().await?.conflicts(env).await
 }
 
 /// Records how p, the environment's owner, resolves one of its conflicts;

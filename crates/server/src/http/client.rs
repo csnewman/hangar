@@ -54,7 +54,7 @@ fn this_place(app: &App) -> Result<&crate::link::Place, ApiError> {
 
 async fn list_links(State(app): State<Shared>, s: Signed) -> Result<Json<types::Links>, ApiError> {
     let place = this_place(&app)?;
-    let mut tx = app.store.begin().await?;
+    let mut tx = app.store.read().await?;
     let person = tx.person(s.principal.user_id).await?;
     let links = tx.links(Some(s.principal.user_id)).await?;
     let bandwidth = tx.link_bandwidth(s.principal.user_id).await?;

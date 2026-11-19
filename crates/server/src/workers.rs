@@ -111,7 +111,7 @@ pub async fn authenticate(store: &Store, credential: &str) -> Result<Option<Uuid
     ) else {
         return Ok(None);
     };
-    let Some(hash) = store.begin().await?.worker_credential(id).await? else {
+    let Some(hash) = store.read().await?.worker_credential(id).await? else {
         return Ok(None);
     };
     let sum = Sha256::digest(&secret);
@@ -146,7 +146,7 @@ pub async fn desired(
         let changed = notify.notified();
         tokio::pin!(changed);
         changed.as_mut().enable();
-        let Some(v) = store.begin().await?.desired_version(id).await? else {
+        let Some(v) = store.read().await?.desired_version(id).await? else {
             return Ok(None);
         };
         if v > after {
@@ -157,7 +157,7 @@ pub async fn desired(
             _ = tokio::time::sleep_until(deadline) => break,
         }
     }
-    let Some((version, envs, images, forget)) = store.begin().await?.desired(id).await? else {
+    let Some((version, envs, images, forget)) = store.read().await?.desired(id).await? else {
         return Ok(None);
     };
     let mut environments = Vec::with_capacity(envs.len());
@@ -228,7 +228,7 @@ pub async fn report(store: &Store, id: Uuid, st: &WorkerStatus) -> fail::Result<
 
 /// Every worker, by name.
 pub async fn list(store: &Store) -> Result<Vec<Listed>> {
-    store.begin().await?.workers(None).await
+    store.read().await?.workers(None).await
 }
 
 /// The worker with id.

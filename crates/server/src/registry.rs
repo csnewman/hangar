@@ -488,7 +488,7 @@ async fn open(
         .await?;
     }
     tx.commit().await?;
-    let mut tx = app.store.begin().await?;
+    let mut tx = app.store.read().await?;
     World::load(&mut tx)
         .await?
         .lookup(c, name)
@@ -535,7 +535,7 @@ async fn authenticate(app: &Shared, headers: &HeaderMap) -> Result<Option<Caller
         else {
             return Ok(None);
         };
-        let u = app.store.begin().await?.user(id).await?;
+        let u = app.store.read().await?.user(id).await?;
         return Ok(u
             .filter(|u| {
                 u.disabled_at.is_none()
@@ -1605,7 +1605,7 @@ pub async fn repositories(
     p: &Principal,
     only: Option<Uuid>,
 ) -> crate::store::Result<Vec<RepositoryView>> {
-    let mut tx = store.begin().await?;
+    let mut tx = store.read().await?;
     let w = World::load(&mut tx).await?;
     let people: HashMap<Uuid, crate::store::rows::User> =
         tx.people().await?.into_iter().map(|u| (u.id, u)).collect();

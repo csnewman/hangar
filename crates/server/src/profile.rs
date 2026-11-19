@@ -101,7 +101,7 @@ async fn wanted(app: &Shared) -> crate::store::Result<HashMap<Uuid, Target>> {
     if workers.is_empty() {
         return Ok(HashMap::new());
     }
-    let mut tx = app.store.begin().await?;
+    let mut tx = app.store.read().await?;
     let names: HashMap<Uuid, String> = tx
         .people()
         .await?
@@ -249,7 +249,7 @@ async fn send_keys(
     let keys: Vec<String> = if t.access.no_ssh_keys {
         Vec::new()
     } else {
-        let mut tx = app.store.begin().await.map_err(bad)?;
+        let mut tx = app.store.read().await.map_err(bad)?;
         tx.ssh_keys(t.owner)
             .await
             .map_err(bad)?

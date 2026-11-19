@@ -5,7 +5,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::Row;
 
-use super::rows::{DnsRecord, TlsEntry, TlsLock};
+use super::rows::DnsRecord;
 use super::{Backend, Result, Tx};
 
 impl Tx {
@@ -26,15 +26,18 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => {
-                let w = &mut tx.work.dns_records;
-                match w
-                    .iter_mut()
-                    .find(|x| x.name == r.name && x.r#type == r.r#type && x.value == r.value)
-                {
-                    Some(x) => x.ttl = r.ttl,
-                    None => w.push(r.clone()),
-                }
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "INSERT INTO dns_records (name, type, value, ttl, created_at) VALUES ($1, $2, $3, $4, $5)
+                     ON CONFLICT (name, type, value) DO UPDATE SET ttl = EXCLUDED.ttl",
+                )
+                .bind(&r.name)
+                .bind(&r.r#type)
+                .bind(&r.value)
+                .bind(r.ttl)
+                .bind(r.created_at)
+                .execute(&mut **tx)
+                .await?;
             }
         }
         Ok(())
@@ -50,10 +53,14 @@ impl Tx {
                     .execute(&mut **tx)
                     .await?;
             }
-            Backend::Json(tx) => tx
-                .work
-                .dns_records
-                .retain(|x| x.name != name || x.r#type != typ || x.value != value),
+            Backend::Lite(tx) => {
+                sqlx::query("DELETE FROM dns_records WHERE name = $1 AND type = $2 AND value = $3")
+                    .bind(name)
+                    .bind(typ)
+                    .bind(value)
+                    .execute(&mut **tx)
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -82,16 +89,26 @@ impl Tx {
                     })
                     .collect()
             }
-            Backend::Json(tx) => {
-                let mut out: Vec<DnsRecord> = tx
-                    .work
-                    .dns_records
-                    .iter()
-                    .filter(|x| x.name == name && x.r#type == typ)
-                    .cloned()
-                    .collect();
-                out.sort_by_key(|x| x.created_at);
-                Ok(out)
+            Backend::Lite(tx) => {
+                let rows = sqlx::query(
+                    "SELECT name, type, value, ttl, created_at FROM dns_records
+                     WHERE name = $1 AND type = $2 ORDER BY created_at",
+                )
+                .bind(name)
+                .bind(typ)
+                .fetch_all(&mut **tx)
+                .await?;
+                rows.iter()
+                    .map(|r| {
+                        Ok(DnsRecord {
+                            name: r.try_get("name")?,
+                            r#type: r.try_get("type")?,
+                            value: r.try_get("value")?,
+                            ttl: r.try_get("ttl")?,
+                            created_at: r.try_get("created_at")?,
+                        })
+                    })
+                    .collect()
             }
         }
     }
@@ -104,12 +121,11 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?
                 .rows_affected()),
-            Backend::Json(tx) => {
-                let w = &mut tx.work.dns_records;
-                let n = w.len();
-                w.retain(|x| x.created_at >= before);
-                Ok((n - w.len()) as u64)
-            }
+            Backend::Lite(tx) => Ok(sqlx::query("DELETE FROM dns_records WHERE created_at < $1")
+                .bind(before)
+                .execute(&mut **tx)
+                .await?
+                .rows_affected()),
         }
     }
 
@@ -121,12 +137,12 @@ impl Tx {
             .bind(key)
             .fetch_optional(&mut **tx)
             .await?),
-            Backend::Json(tx) => Ok(tx
-                .work
-                .tls_storage
-                .iter()
-                .find(|x| x.key == key)
-                .map(|x| x.value.clone())),
+            Backend::Lite(tx) => Ok(sqlx::query_scalar(
+                "SELECT value FROM tls_storage WHERE key = $1",
+            )
+            .bind(key)
+            .fetch_optional(&mut **tx)
+            .await?),
         }
     }
 
@@ -143,14 +159,16 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Backend::Json(tx) => {
-                let w = &mut tx.work.tls_storage;
-                w.retain(|x| x.key != key);
-                w.push(TlsEntry {
-                    key: key.into(),
-                    value: value.into(),
-                    modified: now,
-                });
+            Backend::Lite(tx) => {
+                sqlx::query(
+                    "INSERT INTO tls_storage (key, value, modified) VALUES ($1, $2, $3)
+                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, modified = EXCLUDED.modified",
+                )
+                .bind(key)
+                .bind(value)
+                .bind(now)
+                .execute(&mut **tx)
+                .await?;
             }
         }
         Ok(())
@@ -177,23 +195,18 @@ impl Tx {
             .await?
             .rows_affected()
                 == 1),
-            Backend::Json(tx) => {
-                let w = &mut tx.work.tls_locks;
-                match w.iter_mut().find(|x| x.name == name) {
-                    Some(l) if l.expires_at >= now => Ok(false),
-                    Some(l) => {
-                        l.expires_at = until;
-                        Ok(true)
-                    }
-                    None => {
-                        w.push(TlsLock {
-                            name: name.into(),
-                            expires_at: until,
-                        });
-                        Ok(true)
-                    }
-                }
-            }
+            Backend::Lite(tx) => Ok(sqlx::query(
+                "INSERT INTO tls_locks (name, expires_at) VALUES ($1, $2)
+                 ON CONFLICT (name) DO UPDATE SET expires_at = EXCLUDED.expires_at
+                 WHERE tls_locks.expires_at < $3",
+            )
+            .bind(name)
+            .bind(until)
+            .bind(now)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected()
+                == 1),
         }
     }
 
@@ -209,13 +222,15 @@ impl Tx {
             .await?
             .rows_affected()
                 == 1),
-            Backend::Json(tx) => match tx.work.tls_locks.iter_mut().find(|x| x.name == name) {
-                Some(l) => {
-                    l.expires_at = until;
-                    Ok(true)
-                }
-                None => Ok(false),
-            },
+            Backend::Lite(tx) => Ok(sqlx::query(
+                "UPDATE tls_locks SET expires_at = $2 WHERE name = $1",
+            )
+            .bind(name)
+            .bind(until)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected()
+                == 1),
         }
     }
 
@@ -227,7 +242,12 @@ impl Tx {
                     .execute(&mut **tx)
                     .await?;
             }
-            Backend::Json(tx) => tx.work.tls_locks.retain(|x| x.name != name),
+            Backend::Lite(tx) => {
+                sqlx::query("DELETE FROM tls_locks WHERE name = $1")
+                    .bind(name)
+                    .execute(&mut **tx)
+                    .await?;
+            }
         }
         Ok(())
     }

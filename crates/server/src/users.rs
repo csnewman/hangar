@@ -317,11 +317,12 @@ pub async fn session(store: &Store, token: &str) -> Result<Option<Principal>> {
     }
     let hash = sha256(token);
     let now = Utc::now();
-    let mut tx = store.begin().await?;
+    let mut tx = store.read().await?;
     let Some((user, s)) = tx.session(&hash, now).await? else {
         return Ok(None);
     };
     if now - s.last_seen_at > SESSION_REFRESH {
+        let mut tx = store.writer(tx).await?;
         tx.touch_session(&hash, now, now + SESSION_LIFETIME).await?;
         tx.commit().await?;
     }
@@ -334,13 +335,14 @@ pub async fn token(store: &Store, token: &str) -> Result<Option<Principal>> {
         return Ok(None);
     }
     let now = Utc::now();
-    let mut tx = store.begin().await?;
+    let mut tx = store.read().await?;
     let Some((user, t)) = tx.token(&sha256(token), now).await? else {
         return Ok(None);
     };
     if t.last_used_at
         .is_none_or(|at| now - at > Duration::minutes(1))
     {
+        let mut tx = store.writer(tx).await?;
         tx.touch_token(t.id, now).await?;
         tx.commit().await?;
     }
@@ -476,7 +478,7 @@ pub async fn follow_link(store: &Store, ip: &str, token: &str) -> Result<Option<
 
 /// The user signed in as p.
 pub async fn me(store: &Store, p: &Principal) -> Result<Option<User>> {
-    store.begin().await?.user(p.user_id).await
+    store.read().await?.user(p.user_id).await
 }
 
 /// Makes an access token for p, lasting days, or until revoked; gives the
@@ -685,7 +687,7 @@ pub async fn finish_sign_in(store: &Store, ip: &str, device: &str) -> Result<Col
 
 /// p's access tokens, newest first.
 pub async fn tokens(store: &Store, p: &Principal) -> Result<Vec<AccessToken>> {
-    store.begin().await?.tokens_of(p.user_id).await
+    store.read().await?.tokens_of(p.user_id).await
 }
 
 /// Revokes one of p's access tokens; false if p has none by that ID.
@@ -742,7 +744,7 @@ pub struct Listed {
 
 /// Every person, by name.
 pub async fn list(store: &Store) -> Result<Vec<Listed>> {
-    let mut tx = store.begin().await?;
+    let mut tx = store.read().await?;
     let mut out = Vec::new();
     for user in tx.people().await? {
         let environments = tx.owned_environments(user.id).await?;

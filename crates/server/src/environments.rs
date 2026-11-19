@@ -1180,7 +1180,7 @@ pub async fn end_task(store: &Store, p: &Principal, id: Uuid) -> fail::Result<()
 
 /// The tasks of an environment p may reach, newest first.
 pub async fn tasks(store: &Store, p: &Principal, id: Uuid) -> fail::Result<Vec<Task>> {
-    let mut tx = store.begin().await?;
+    let mut tx = store.read().await?;
     locked(&mut tx, p, id).await?;
     Ok(tx.tasks_of(id).await?)
 }

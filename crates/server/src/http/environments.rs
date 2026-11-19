@@ -817,7 +817,7 @@ fn event(name: &str, data: &Value, at: &Mark) -> Bytes {
 
 /// Where a read begun at this moment would read to.
 async fn mark(app: &Shared) -> Result<Mark, crate::store::Error> {
-    let mut tx = app.store.begin().await?;
+    let mut tx = app.store.read().await?;
     let m = tx.mark().await?;
     tx.commit().await?;
     Ok(m)

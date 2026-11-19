@@ -10,8 +10,10 @@ use crate::publichost::{Public, Style};
 pub enum Storage {
     /// A Postgres database, by URL: a deployment, any number of servers.
     Postgres(String),
-    /// A JSON file, for one server on one machine.
-    Json(PathBuf),
+    /// A SQLite database, for one server on one machine, by its path; a
+    /// JSON state file's path names the database beside it, which imports
+    /// the file.
+    Sqlite(PathBuf),
 }
 
 #[derive(Debug, Clone)]
@@ -246,7 +248,7 @@ fn blob_config(
 ) -> Result<crate::blob::Config, String> {
     let url = match (var("HANGAR_BLOB_URL"), storage) {
         (Some(u), _) => u,
-        (None, Storage::Json(state)) => {
+        (None, Storage::Sqlite(state)) => {
             format!("file://{}", state.with_extension("blobs").display())
         }
         (None, Storage::Postgres(_)) => {
@@ -415,7 +417,7 @@ impl Config {
     fn read(var: &dyn Fn(&str) -> Option<String>) -> Result<Config, String> {
         let storage = match (var("HANGAR_DATABASE_URL"), var("HANGAR_STATE_FILE")) {
             (Some(url), None) => Storage::Postgres(url),
-            (None, Some(path)) => Storage::Json(path.into()),
+            (None, Some(path)) => Storage::Sqlite(path.into()),
             (Some(_), Some(_)) => {
                 return Err(
                     "HANGAR_DATABASE_URL and HANGAR_STATE_FILE are both set: a server keeps its state in one".into(),
@@ -423,7 +425,7 @@ impl Config {
             }
             (None, None) => {
                 return Err(
-                    "no storage: set HANGAR_DATABASE_URL (Postgres) or HANGAR_STATE_FILE (a JSON file)".into(),
+                    "no storage: set HANGAR_DATABASE_URL (Postgres) or HANGAR_STATE_FILE (a SQLite database)".into(),
                 );
             }
         };

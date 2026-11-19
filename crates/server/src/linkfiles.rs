@@ -788,7 +788,7 @@ pub async fn run(app: Arc<App>, place: Uuid) {
 async fn look(app: &App, place: Uuid, copies: &[Uuid]) -> Result<(), String> {
     let mut whose: HashMap<Uuid, Vec<(String, Uuid, Uuid)>> = HashMap::new();
     let paths = {
-        let mut tx = app.store.begin().await.map_err(store_err)?;
+        let mut tx = app.store.read().await.map_err(store_err)?;
         let users: HashSet<Uuid> = tx
             .linked_users()
             .await
@@ -851,7 +851,7 @@ pub async fn versions(
     to: Uuid,
 ) -> Result<(FileVersions, Vec<Job>), String> {
     let (all, paths) = {
-        let mut tx = app.store.begin().await.map_err(store_err)?;
+        let mut tx = app.store.read().await.map_err(store_err)?;
         let all = linked(&mut tx, user).await.map_err(store_err)?;
         (
             all,
@@ -914,7 +914,7 @@ pub async fn compare(
     theirs: &FileVersions,
 ) -> Result<Compared, String> {
     let (all, paths) = {
-        let mut tx = app.store.begin().await.map_err(store_err)?;
+        let mut tx = app.store.read().await.map_err(store_err)?;
         let all = linked(&mut tx, user).await.map_err(store_err)?;
         (
             all,
@@ -1046,7 +1046,7 @@ pub async fn read(
     to: Uuid,
 ) -> Result<Option<(FilePiece, Vec<u8>)>, String> {
     let for_them = {
-        let mut tx = app.store.begin().await.map_err(store_err)?;
+        let mut tx = app.store.read().await.map_err(store_err)?;
         linked(&mut tx, user)
             .await
             .map_err(store_err)?

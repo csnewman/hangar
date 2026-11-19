@@ -198,7 +198,7 @@ impl World {
 
 /// Every template p may see, by name, then owner.
 pub async fn list(store: &Store, p: &Principal) -> StoreResult<Vec<View>> {
-    let mut tx = store.begin().await?;
+    let mut tx = store.read().await?;
     let w = World::load(&mut tx).await?;
     let mut out: Vec<View> = w.templates.iter().filter_map(|t| w.view(p, t)).collect();
     out.sort_by(|a, b| {
@@ -210,7 +210,7 @@ pub async fn list(store: &Store, p: &Principal) -> StoreResult<Vec<View>> {
 
 /// The template with id, if p may see it.
 pub async fn get(store: &Store, p: &Principal, id: Uuid) -> StoreResult<Option<View>> {
-    let mut tx = store.begin().await?;
+    let mut tx = store.read().await?;
     let w = World::load(&mut tx).await?;
     Ok(w.templates
         .iter()
@@ -326,7 +326,7 @@ pub async fn update(
     let input = normalise(input)?;
     // A template saved with a new image is checked: workers pull whatever
     // a template names, so its saver must reach it.
-    let before = store.begin().await?.template(id).await?;
+    let before = store.read().await?.template(id).await?;
     let image_of = |t: &Template| {
         serde_json::from_value::<TemplateSpec>(t.spec.clone())
             .map(|s| s.spec.image)

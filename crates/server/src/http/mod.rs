@@ -159,7 +159,7 @@ async fn name_ui(req: Request, next: axum::middleware::Next) -> Response {
 /// Whether the server can reach its store.
 async fn healthz(axum::extract::State(app): axum::extract::State<Shared>) -> Response {
     let reached = async {
-        let tx = app.store.begin().await?;
+        let tx = app.store.read().await?;
         tx.commit().await
     };
     match tokio::time::timeout(std::time::Duration::from_secs(2), reached).await {

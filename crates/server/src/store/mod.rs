@@ -1,10 +1,11 @@
-//! Where the server keeps its state: Postgres for a deployment, or a JSON
-//! file for one server on one machine, behind one set of transactions.
+//! Where the server keeps its state: Postgres for a deployment, or SQLite
+//! for one server on one machine, behind one set of transactions.
 //!
 //! Each domain's reads and writes are methods on `Tx`, written for both
-//! backends (users.rs and the like beside this); the rows are `rows.rs`'s,
-//! the Postgres tables' as `migrations/` makes them, which the
-//! JSON file holds as they are.
+//! backends (users.rs and the like beside this), each in its own SQL; the
+//! rows are `rows.rs`'s, the Postgres tables' as `migrations/` makes them,
+//! which `migrations-sqlite/` mirrors. A row is read the same way from
+//! either (`Get`).
 
 pub mod audit;
 mod catalog;
@@ -14,6 +15,7 @@ mod hosts;
 mod json;
 pub mod keys;
 mod links;
+mod lite;
 mod packs;
 mod pg;
 mod registry;
@@ -25,6 +27,10 @@ mod users;
 pub mod workers;
 
 use std::sync::Arc;
+
+use sqlx::postgres::PgRow;
+use sqlx::sqlite::SqliteRow;
+use sqlx::{ColumnIndex, Row};
 
 use crate::config::Storage;
 use signals::{Signal, Signals};
@@ -57,12 +63,13 @@ pub struct Store {
 #[derive(Clone)]
 enum Kind {
     Pg(sqlx::PgPool),
-    Json(Arc<json::File>),
+    Lite(Arc<lite::Lite>),
 }
 
 /// How far a reader of environments had read: the Postgres snapshot it
-/// read from, or the JSON file's revisions up to one. A client keeps it as
-/// a token and comes back with it, to be sent only what it has not seen.
+/// read from, or the SQLite store's revisions up to one. A client keeps
+/// it as a token and comes back with it, to be sent only what it has not
+/// seen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Mark {
     /// The transactions finished before xmin, and those before xmax but
@@ -77,9 +84,10 @@ pub enum Mark {
 
 impl Mark {
     /// Reads a token: "p:" and a Postgres snapshot (XMIN:XMAX:XIP,...), or
-    /// "j:" and a revision.
+    /// "r:" and a revision ("j:" being a JSON state file's, whose
+    /// revisions its import keeps).
     pub fn parse(s: &str) -> Option<Mark> {
-        if let Some(n) = s.strip_prefix("j:") {
+        if let Some(n) = s.strip_prefix("r:").or_else(|| s.strip_prefix("j:")) {
             return n.parse().ok().map(Mark::Revision);
         }
         let mut parts = s.strip_prefix("p:")?.splitn(3, ':');
@@ -109,7 +117,7 @@ impl Mark {
                 let running: Vec<String> = running.iter().map(u64::to_string).collect();
                 format!("p:{xmin}:{xmax}:{}", running.join(","))
             }
-            Mark::Revision(n) => format!("j:{n}"),
+            Mark::Revision(n) => format!("r:{n}"),
         }
     }
 
@@ -145,11 +153,13 @@ pub struct Tx {
     pub(super) inner: Backend,
     signalled: Vec<Signal>,
     signals: Arc<Signals>,
+    /// Whether it may write: all of Postgres's do, SQLite's readers do not.
+    writes: bool,
 }
 
 pub(super) enum Backend {
     Pg(sqlx::Transaction<'static, sqlx::Postgres>),
-    Json(Box<json::Tx>),
+    Lite(sqlx::Transaction<'static, sqlx::Sqlite>),
 }
 
 impl Store {
@@ -163,7 +173,7 @@ impl Store {
                 tokio::spawn(signals::listen(pool.clone(), signals.clone()));
                 Kind::Pg(pool)
             }
-            Storage::Json(path) => Kind::Json(Arc::new(json::File::open(path)?)),
+            Storage::Sqlite(path) => Kind::Lite(Arc::new(lite::open(path).await?)),
         };
         Ok(Store { backend, signals })
     }
@@ -172,20 +182,47 @@ impl Store {
     pub async fn begin(&self) -> Result<Tx> {
         let inner = match &self.backend {
             Kind::Pg(pool) => Backend::Pg(pool.begin().await?),
-            Kind::Json(file) => Backend::Json(Box::new(file.begin().await)),
+            Kind::Lite(db) => Backend::Lite(db.writer.begin().await?),
         };
-        Ok(Tx {
+        Ok(self.tx(inner, true))
+    }
+
+    /// Starts a transaction that only reads. In SQLite it reads beside the
+    /// one that writes, from the database as last committed, on a
+    /// connection that refuses writes; in Postgres it is `begin`'s.
+    pub async fn read(&self) -> Result<Tx> {
+        Ok(match &self.backend {
+            Kind::Pg(pool) => self.tx(Backend::Pg(pool.begin().await?), true),
+            Kind::Lite(db) => self.tx(Backend::Lite(db.readers.begin().await?), false),
+        })
+    }
+
+    /// A transaction that writes, for one that has read what it decides
+    /// on: the same one where it may write (always, in Postgres), else a
+    /// new one, which what it writes must suit whatever changed between.
+    pub async fn writer(&self, tx: Tx) -> Result<Tx> {
+        if tx.writes {
+            return Ok(tx);
+        }
+        drop(tx);
+        self.begin().await
+    }
+
+    fn tx(&self, inner: Backend, writes: bool) -> Tx {
+        Tx {
             inner,
             signalled: Vec::new(),
             signals: self.signals.clone(),
-        })
+            writes,
+        }
     }
 }
 
 impl Tx {
     /// Keeps what the transaction wrote, and signals what it changed, to
     /// other servers sharing a database too: environments' changes reach
-    /// them by the database's own triggers.
+    /// them by the database's own triggers. In SQLite each environment
+    /// signalled takes the next revision as it commits.
     pub async fn commit(self) -> Result<()> {
         match self.inner {
             Backend::Pg(mut tx) => {
@@ -205,13 +242,13 @@ impl Tx {
                 }
                 tx.commit().await?
             }
-            Backend::Json(mut tx) => {
+            Backend::Lite(mut tx) => {
                 for s in &self.signalled {
                     if let Signal::Environment(id) = s {
-                        tx.revise(*id);
+                        lite::revise(&mut tx, *id).await?;
                     }
                 }
-                (*tx).commit()?
+                tx.commit().await?
             }
         }
         for s in self.signalled {
@@ -231,7 +268,7 @@ impl Tx {
                 Mark::parse(&format!("p:{s}"))
                     .ok_or_else(|| Error(format!("the snapshot {s} does not read")))
             }
-            Backend::Json(tx) => Ok(Mark::Revision(tx.work.last_revision)),
+            Backend::Lite(tx) => lite::mark(tx).await,
         }
     }
 
@@ -242,3 +279,93 @@ impl Tx {
         }
     }
 }
+
+/// A row of either backend, read by column name or position, as sqlx's
+/// `Row::try_get`; the store's row functions take one, so one function
+/// reads a row from Postgres and SQLite alike.
+pub(super) trait Get {
+    fn try_get<T: Field, I: ColumnIndex<PgRow> + ColumnIndex<SqliteRow>>(
+        &self,
+        index: I,
+    ) -> std::result::Result<T, sqlx::Error>;
+}
+
+impl Get for PgRow {
+    fn try_get<T: Field, I: ColumnIndex<PgRow> + ColumnIndex<SqliteRow>>(
+        &self,
+        index: I,
+    ) -> std::result::Result<T, sqlx::Error> {
+        T::pg(self, index)
+    }
+}
+
+impl Get for SqliteRow {
+    fn try_get<T: Field, I: ColumnIndex<PgRow> + ColumnIndex<SqliteRow>>(
+        &self,
+        index: I,
+    ) -> std::result::Result<T, sqlx::Error> {
+        T::lite(self, index)
+    }
+}
+
+/// A column's type, as each backend keeps it: in Postgres as itself, in
+/// SQLite as sqlx keeps it there, but for arrays, which are JSON arrays.
+pub(super) trait Field: Sized {
+    fn pg<I: ColumnIndex<PgRow>>(r: &PgRow, i: I) -> std::result::Result<Self, sqlx::Error>;
+    fn lite<I: ColumnIndex<SqliteRow>>(
+        r: &SqliteRow,
+        i: I,
+    ) -> std::result::Result<Self, sqlx::Error>;
+}
+
+macro_rules! fields {
+    ($($t:ty),* $(,)?) => {$(
+        impl Field for $t {
+            fn pg<I: ColumnIndex<PgRow>>(r: &PgRow, i: I) -> std::result::Result<Self, sqlx::Error> {
+                Row::try_get(r, i)
+            }
+            fn lite<I: ColumnIndex<SqliteRow>>(
+                r: &SqliteRow,
+                i: I,
+            ) -> std::result::Result<Self, sqlx::Error> {
+                Row::try_get(r, i)
+            }
+        }
+    )*};
+}
+
+fields!(
+    bool,
+    i32,
+    i64,
+    Option<i32>,
+    Option<i64>,
+    String,
+    Option<String>,
+    Vec<u8>,
+    Option<Vec<u8>>,
+    uuid::Uuid,
+    Option<uuid::Uuid>,
+    serde_json::Value,
+    Option<serde_json::Value>,
+    chrono::DateTime<chrono::Utc>,
+    Option<chrono::DateTime<chrono::Utc>>,
+);
+
+macro_rules! arrays {
+    ($($t:ty),* $(,)?) => {$(
+        impl Field for Vec<$t> {
+            fn pg<I: ColumnIndex<PgRow>>(r: &PgRow, i: I) -> std::result::Result<Self, sqlx::Error> {
+                Row::try_get(r, i)
+            }
+            fn lite<I: ColumnIndex<SqliteRow>>(
+                r: &SqliteRow,
+                i: I,
+            ) -> std::result::Result<Self, sqlx::Error> {
+                Row::try_get::<sqlx::types::Json<Vec<$t>>, _>(r, i).map(|j| j.0)
+            }
+        }
+    )*};
+}
+
+arrays!(String, uuid::Uuid);

@@ -237,7 +237,7 @@ impl Zone {
 
     async fn txt(&self, name: &str) -> Result<Vec<DnsRecord>, String> {
         let look = async {
-            let mut tx = self.store.begin().await?;
+            let mut tx = self.store.read().await?;
             let recs = tx.dns_records(name, "TXT").await?;
             tx.commit().await?;
             Ok::<_, crate::store::Error>(recs)
